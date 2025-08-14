@@ -51,9 +51,10 @@ def fetch_source(url, log_list, desc, parse_fn=None):
         return []
 
 def parse_news(r):
-    root = BeautifulSoup(r.content, features="xml")
+    """Parse news from RSS feed"""
+    soup = BeautifulSoup(r, features="xml")
     articles = []
-    for item in root.find_all("item")[:5]:
+    for item in soup.find_all("item")[:5]:
         articles.append({
             "title": item.title.text,
             "link": item.link.text,
@@ -61,8 +62,8 @@ def parse_news(r):
         })
     return articles
 
-def parse_reviews(r):
-    """Extract longer text snippets only"""
+def parse_reviews_generic(r):
+    """Extract meaningful text snippets for generic sources"""
     soup = BeautifulSoup(r, "html.parser")
     snippets = []
     for p in soup.find_all("p"):
@@ -70,6 +71,19 @@ def parse_reviews(r):
         if len(text) > 20:
             snippets.append(text)
     return snippets[:5]
+
+def parse_yelp_reviews(r):
+    """Yelp scraping - get snippet + rating if possible"""
+    soup = BeautifulSoup(r, "html.parser")
+    reviews = []
+    for div in soup.find_all("div", {"class":"review__373c0__13kpL"}):
+        rating_div = div.find("div", {"role":"img"})
+        rating = rating_div["aria-label"] if rating_div else None
+        text = div.find("span")
+        text = text.get_text().strip() if text else ""
+        if text:
+            reviews.append({"rating": rating, "snippet": text})
+    return reviews[:5]
 
 def assess_facility(row):
     """Summarize key CMS info"""
@@ -120,14 +134,16 @@ if org_name_input:
 
         # Fetching multiple sources with progress updates
         news = fetch_source(f"https://news.google.com/rss/search?q={org_name_input.replace(' ','+')}", log_list, "News", parse_news)
-        progress.progress(40)
-        google_reviews = fetch_source(f"https://www.google.com/search?q={org_name_input.replace(' ','+') + '+reviews'}", log_list, "Google Reviews", parse_reviews)
-        progress.progress(55)
-        yelp_reviews = fetch_source(f"https://www.yelp.com/search?find_desc={org_name_input.replace(' ','+')}", log_list, "Yelp Reviews", parse_reviews)
-        progress.progress(70)
-        ratemds_reviews = fetch_source(f"https://www.ratemds.com/search/?q={org_name_input.replace(' ','+')}", log_list, "RateMDs Reviews", parse_reviews)
-        progress.progress(85)
-        healthgrades_reviews = fetch_source(f"https://www.healthgrades.com/usearch?what={org_name_input.replace(' ','+')}", log_list, "Healthgrades Reviews", parse_reviews)
+        progress.progress(35)
+        google_reviews = fetch_source(f"https://www.google.com/search?q={org_name_input.replace(' ','+') + '+reviews'}", log_list, "Google Reviews", parse_reviews_generic)
+        progress.progress(50)
+        yelp_reviews = fetch_source(f"https://www.yelp.com/search?find_desc={org_name_input.replace(' ','+')}", log_list, "Yelp Reviews", parse_yelp_reviews)
+        progress.progress(65)
+        ratemds_reviews = fetch_source(f"https://www.ratemds.com/search/?q={org_name_input.replace(' ','+')}", log_list, "RateMDs Reviews", parse_reviews_generic)
+        progress.progress(80)
+        healthgrades_reviews = fetch_source(f"https://www.healthgrades.com/usearch?what={org_name_input.replace(' ','+')}", log_list, "Healthgrades Reviews", parse_reviews_generic)
+        progress.progress(95)
+
         progress.progress(100)
 
         # Display News
