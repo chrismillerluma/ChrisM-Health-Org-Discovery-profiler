@@ -9,25 +9,32 @@ from datetime import datetime
 @st.cache_data
 def load_cms_data():
     url = "https://data.medicare.gov/api/views/xubh-q36u/rows.csv?accessType=DOWNLOAD"
-    df = pd.read_csv(url, dtype=str)
+    try:
+        df = pd.read_csv(url, dtype=str)
+    except Exception as e:
+        st.warning(f"⚠️ Could not fetch live CMS data ({e}). Using local backup instead.")
+        df = pd.read_csv("cms_hospitals_backup.csv", dtype=str)
     return df
 
 # ---- Get News from Google News RSS ----
 def get_news(org_name):
     rss_url = f"https://news.google.com/rss/search?q={org_name.replace(' ', '+')}"
-    r = requests.get(rss_url)
     articles = []
-    if r.status_code == 200:
-        root = ET.fromstring(r.content)
-        for item in root.findall(".//item")[:5]:
-            title = item.find("title").text
-            link = item.find("link").text
-            pub_date = item.find("pubDate").text
-            articles.append({
-                "title": title,
-                "link": link,
-                "date": pub_date
-            })
+    try:
+        r = requests.get(rss_url, timeout=5)
+        if r.status_code == 200:
+            root = ET.fromstring(r.content)
+            for item in root.findall(".//item")[:5]:
+                title = item.find("title").text
+                link = item.find("link").text
+                pub_date = item.find("pubDate").text
+                articles.append({
+                    "title": title,
+                    "link": link,
+                    "date": pub_date
+                })
+    except Exception as e:
+        st.warning(f"⚠️ Could not fetch news: {e}")
     return articles
 
 # ---- Simple Risk/Opportunity Generator ----
@@ -92,14 +99,3 @@ if org_name:
             file_name=f"{org_name.replace(' ','_')}_profile.json",
             mime="application/json"
         )
-
-# --------------- NEXT STEPS (dev notes in-code) ---------------
-# TODOs for production:
-# - Add CMS quality/star/complication datasets joins by provider_id
-# - Add Medicare Cost Report pull (HCRIS) for beds, FTEs, payer mix
-# - Add IRS 990 (ProPublica Nonprofit Explorer API) for nonprofits
-# - Add State Hospital Association utilization reports scraper (where permitted)
-# - Add robust entity resolution across multi-facility systems
-# - Persist to a DB (e.g., Postgres) and add Redis caching
-# - Implement typed client classes + retries + circuit breakers
-# - Add OpenAI/LLM summarizer to turn raw facts into 3-sentence briefing + tailored discovery questions
