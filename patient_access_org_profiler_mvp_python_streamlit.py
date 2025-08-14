@@ -1,4 +1,8 @@
-pip install rapidfuzz
+rapidfuzz>=2.16.0
+beautifulsoup4>=4.12.2
+requests>=2.31.0
+pandas>=2.2.0
+streamlit>=1.24.0
 import streamlit as st
 import pandas as pd
 import json
