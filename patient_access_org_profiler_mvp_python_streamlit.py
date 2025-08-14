@@ -1,190 +1,137 @@
-rapidfuzz>=2.16.0
-beautifulsoup4>=4.12.2
-requests>=2.31.0
-pandas>=2.2.0
-streamlit>=1.24.0
 import streamlit as st
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+from rapidfuzz import process, fuzz
 import json
 from datetime import datetime
-from rapidfuzz import fuzz
 
-# -----------------------
-# Simulated CMS / Org Data
-# -----------------------
-def load_cms_data_sim():
-    data = [
-        {
-            "Hospital Name": "Saint Mary Medical Center",
-            "Hospital Type": "Acute Care",
-            "Hospital Ownership": "Government - Local",
-            "Emergency Services": "Yes",
-            "Hospital Overall Rating": "4",
-            "Total Licensed Beds": "250",
-            "City": "Springfield",
-            "State": "IL",
-            "ER Wait Time": "25 min",
-            "Specialties": "Cardiology, Orthopedics, Neurology",
-            "Annual Patient Volume": "12,000"
-        },
-        {
-            "Hospital Name": "Green Valley Clinic",
-            "Hospital Type": "Specialty",
-            "Hospital Ownership": "Private",
-            "Emergency Services": "No",
-            "Hospital Overall Rating": "2",
-            "Total Licensed Beds": "50",
-            "City": "Greenville",
-            "State": "CA",
-            "ER Wait Time": "N/A",
-            "Specialties": "Dermatology, Endocrinology",
-            "Annual Patient Volume": "2,500"
-        },
-        {
-            "Hospital Name": "Lakeside Health",
-            "Hospital Type": "Acute Care",
-            "Hospital Ownership": "Private",
-            "Emergency Services": "Yes",
-            "Hospital Overall Rating": "3",
-            "Total Licensed Beds": "180",
-            "City": "Lakeside",
-            "State": "NY",
-            "ER Wait Time": "40 min",
-            "Specialties": "Pediatrics, Oncology, Surgery",
-            "Annual Patient Volume": "8,000"
-        },
-    ]
-    return pd.DataFrame(data)
+# ---- Load CMS Hospital Data ----
+@st.cache_data
+def load_cms_data():
+    url = "https://data.medicare.gov/api/views/xubh-q36u/rows.csv?accessType=DOWNLOAD"
+    try:
+        df = pd.read_csv(url, dtype=str)
+        st.success("CMS data loaded from web.")
+    except Exception:
+        try:
+            df = pd.read_csv("cms_hospitals_backup.csv", dtype=str)
+            st.warning("Unable to load CMS data from web. Using local backup if available.")
+        except Exception:
+            st.error("CMS data not available.")
+            df = pd.DataFrame()
+    return df
 
-# -----------------------
-# Simulated News / Reviews
-# -----------------------
-def get_news_sim(org_name):
-    return [
-        {"title": f"{org_name} launches new patient portal", "link": "#", "date": "2025-08-01"},
-        {"title": f"Patient satisfaction rises at {org_name}", "link": "#", "date": "2025-07-15"},
-        {"title": f"{org_name} faces staffing shortage", "link": "#", "date": "2025-06-30"},
-    ]
+# ---- Fuzzy name matching ----
+def match_org_name(name, choices, limit=5):
+    matches = process.extract(name, choices, scorer=fuzz.WRatio, limit=limit)
+    return matches
 
-def get_reviews_sim(org_name):
-    return [
-        {"source": "Google Reviews", "text": "Excellent care and friendly staff."},
-        {"source": "Healthgrades", "text": "Long wait times in the ER."},
-        {"source": "Yelp", "text": "Clean facilities but difficult parking."},
-        {"source": "Reddit", "text": "Highly recommend for cardiology treatments."},
-        {"source": "Twitter", "text": "Staff was rude, but treatment was effective."}
-    ]
+# ---- Scrape Google News ----
+def get_news(org_name):
+    rss_url = f"https://news.google.com/rss/search?q={org_name.replace(' ','+')}"
+    try:
+        r = requests.get(rss_url, timeout=10)
+        root = BeautifulSoup(r.content, features="xml")
+        items = root.findAll("item")[:5]
+        articles = []
+        for item in items:
+            articles.append({
+                "title": item.title.text,
+                "link": item.link.text,
+                "date": item.pubDate.text
+            })
+        return articles
+    except:
+        return []
 
-# -----------------------
-# Highlights / Stats
-# -----------------------
-def assess_highlights(row):
-    highlights = {"positives": [], "negatives": [], "stats": []}
-    rating = int(row.get("Hospital Overall Rating", "0"))
-    if rating >= 4:
-        highlights["positives"].append("High patient rating — strong reputation.")
-    elif rating <= 2:
-        highlights["negatives"].append("Low patient rating — potential quality concerns.")
+# ---- Scrape Google Reviews (basic) ----
+def get_google_reviews(org_name):
+    search_url = f"https://www.google.com/search?q={org_name.replace(' ','+')+ '+reviews'}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        r = requests.get(search_url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        reviews = []
+        for div in soup.find_all("div"):
+            text = div.get_text().strip()
+            if len(text) > 50:
+                reviews.append(text)
+        return reviews[:5]
+    except:
+        return []
 
-    if row.get("Emergency Services") == "Yes":
-        highlights["positives"].append("Offers emergency services.")
-    else:
-        highlights["negatives"].append("No emergency services — may limit patient volume.")
+# ---- Assess Risks & Opportunities ----
+def assess_risks_ops(row):
+    risks, ops = [], []
+    rating = row.get("Hospital overall rating")
+    if rating and rating.isdigit():
+        rating = int(rating)
+        if rating <= 2: risks.append("Low star rating — potential quality/perception issues.")
+        elif rating >= 4: ops.append("High star rating — leverage strong reputation.")
+    if row.get("Emergency Services") == "No":
+        risks.append("No emergency services — may affect patient volume mix.")
+    if "Government" in (row.get("Hospital ownership") or ""):
+        ops.append("Government-owned — may have grant or public funding access.")
+    return risks, ops
 
-    beds = row.get("Total Licensed Beds")
-    if beds:
-        highlights["stats"].append(f"Total Licensed Beds: {beds}")
+# ---- Streamlit UI ----
+st.title("🏥 Patient Access Org Profiler — Full Report")
 
-    ownership = row.get("Hospital Ownership")
-    if ownership:
-        highlights["stats"].append(f"Ownership: {ownership}")
+org_input = st.text_input("Organization / Vendor Name")
 
-    location = f"{row.get('City')}, {row.get('State')}"
-    highlights["stats"].append(f"Location: {location}")
+df_cms = load_cms_data()
 
-    # Extra stats
-    for stat_key in ["ER Wait Time", "Specialties", "Annual Patient Volume"]:
-        if row.get(stat_key):
-            highlights["stats"].append(f"{stat_key}: {row[stat_key]}")
+if org_input and not df_cms.empty:
+    matches = match_org_name(org_input, df_cms["Hospital Name"].tolist(), limit=5)
+    st.subheader("Matching Organizations (Fuzzy)")
+    for m in matches:
+        st.write(f"{m[0]} — Score: {m[1]}")
 
-    return highlights
+    best_match = matches[0][0]
+    st.info(f"Using best match: {best_match}")
 
-# -----------------------
-# Streamlit App
-# -----------------------
-st.set_page_config(page_title="Org Profiler", layout="wide")
-st.title("🏥 Patient Access Org Profiler — Enhanced Test Mode")
+    row = df_cms[df_cms["Hospital Name"]==best_match].iloc[0].to_dict()
 
-org_name_input = st.text_input("Enter Hospital or Vendor Name", "")
-
-df_cms = load_cms_data_sim()
-
-if org_name_input:
-    # Fuzzy matching to find closest name
-    names_list = df_cms["Hospital Name"].tolist()
-    match_name, score, idx = process.extractOne(
-        org_name_input, names_list, scorer=fuzz.WRatio, score_cutoff=50
-    ) or (None, 0, None)
-
-    if match_name:
-        st.success(f"Matched to: {match_name} ({score}% similarity)")
-        row = df_cms.iloc[idx].to_dict()
-    else:
-        st.warning("No close match found. Showing first entry for preview.")
-        row = df_cms.iloc[0].to_dict()
-
-    # Facility Info
-    st.subheader("🏥 Facility Information")
+    st.subheader("🏥 Facility Info")
     st.json(row)
 
-    # News
     st.subheader("📰 Recent News")
-    news_items = get_news_sim(row["Hospital Name"])
-    for article in news_items:
-        st.markdown(f"- [{article['title']}]({article['link']}) ({article['date']})")
+    news_items = get_news(best_match)
+    if news_items:
+        for n in news_items:
+            st.markdown(f"- [{n['title']}]({n['link']}) ({n['date']})")
+    else:
+        st.write("No recent news found.")
 
-    # Reviews
-    st.subheader("💬 Patient & Vendor Reviews")
-    reviews = get_reviews_sim(row["Hospital Name"])
-    for rev in reviews:
-        st.markdown(f"- **{rev['source']}**: {rev['text']}")
+    st.subheader("🌟 Patient Reviews / Feedback")
+    reviews = get_google_reviews(best_match)
+    if reviews:
+        for r in reviews:
+            st.write(f"- {r}")
+    else:
+        st.write("No reviews found.")
 
-    # Highlights & Stats
-    st.subheader("⚡ Highlights & Stats")
-    highlights = assess_highlights(row)
-    st.markdown("**Positives:**")
-    for p in highlights["positives"]:
-        st.write(f"- {p}")
-    st.markdown("**Negatives / Challenges:**")
-    for n in highlights["negatives"]:
-        st.write(f"- {n}")
-    st.markdown("**Key Stats:**")
-    for s in highlights["stats"]:
-        st.write(f"- {s}")
+    st.subheader("⚠️ Risks & 💡 Opportunities")
+    risks, ops = assess_risks_ops(row)
+    st.markdown("**Risks:**")
+    for r in risks: st.write(f"- {r}")
+    st.markdown("**Opportunities:**")
+    for o in ops: st.write(f"- {o}")
 
-    # Summary
-    st.subheader("📝 Summary")
-    summary_text = f"""
-**Summary for {row['Hospital Name']}**
-
-{', '.join(highlights['positives'])}  
-{', '.join(highlights['negatives'])}  
-Located in {row['City']}, {row['State']}, with {row['Total Licensed Beds']} beds. Ownership: {row['Hospital Ownership']}.
-"""
-    st.write(summary_text)
-
-    # Download JSON
+    # ---- JSON download ----
     dossier = {
+        "organization": best_match,
         "facility_info": row,
         "news": news_items,
         "reviews": reviews,
-        "highlights": highlights,
-        "summary": summary_text,
+        "risks": risks,
+        "opportunities": ops,
         "generated_at": datetime.now().isoformat()
     }
     st.download_button(
-        label="📥 Download JSON Report",
+        "📥 Download JSON Dossier",
         data=json.dumps(dossier, indent=2),
-        file_name=f"{org_name_input.replace(' ','_')}_profile.json",
+        file_name=f"{best_match.replace(' ','_')}_profile.json",
         mime="application/json"
     )
