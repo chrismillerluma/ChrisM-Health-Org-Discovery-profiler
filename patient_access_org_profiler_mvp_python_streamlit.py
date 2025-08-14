@@ -1,21 +1,4 @@
-"""
-Patient Access Org Profiler — MVP
----------------------------------
-A one-file Streamlit app that takes a health system / hospital name and builds a
-pre-discovery customer profile for Patient Access / Epic environments by pulling:
-- Google Places (facility) basics + recent review themes
-- CMS Care Compare open data (beds, type, address, quality signals)
-- Web news/press releases (via Bing or Google Custom Search) — stubbed adapter
-- KLAS summary placeholder (manual or private subscription input)
-- LinkedIn company page basics — stubbed adapter
-
-IMPORTANT
-- Populate environment variables before running (see CONFIG section).
-- Some sources require API keys and/or paid access; stubs provided with TODOs.
-- Respect each site's Terms of Service and robots.txt when scraping.
-
-Run:
- import streamlit as st
+import streamlit as st
 import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
