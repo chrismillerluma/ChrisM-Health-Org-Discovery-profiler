@@ -4,82 +4,98 @@ import requests
 import xml.etree.ElementTree as ET
 import json
 from datetime import datetime
+from difflib import get_close_matches
 
-# ---- Load CMS Hospital Data (Backup CSV) ----
+# ---- Load CMS Hospital General Information ----
 @st.cache_data
 def load_cms_data():
+    url = "https://data.medicare.gov/api/views/xubh-q36u/rows.csv?accessType=DOWNLOAD"
     try:
-        url = "https://data.medicare.gov/api/views/xubh-q36u/rows.csv?accessType=DOWNLOAD"
         df = pd.read_csv(url, dtype=str)
+        st.info("✅ Loaded CMS hospital data from web.")
         return df
     except Exception:
-        st.warning("Unable to load CMS data from web. Using local backup if available.")
+        st.warning("⚠️ Unable to load CMS data from web. Trying local backup.")
         try:
             df = pd.read_csv("cms_hospitals_backup.csv", dtype=str)
+            st.info("✅ Loaded CMS hospital data from local backup.")
             return df
-        except FileNotFoundError:
-            st.error("No CMS data available. Some features will be limited.")
+        except Exception:
+            st.error("❌ No CMS data available.")
             return pd.DataFrame()
 
-# ---- Fetch Google News ----
-def get_news(org_name):
-    rss_url = f"https://news.google.com/rss/search?q={org_name.replace(' ','+')}"
+# ---- Google News RSS ----
+def get_news(org_name, max_articles=5):
+    rss_url = f"https://news.google.com/rss/search?q={org_name.replace(' ', '+')}"
     articles = []
     try:
         r = requests.get(rss_url, timeout=5)
         if r.status_code == 200:
             root = ET.fromstring(r.content)
-            for item in root.findall(".//item")[:5]:
-                title = item.find("title").text
-                link = item.find("link").text
-                pub_date = item.find("pubDate").text
-                articles.append({"title": title, "link": link, "date": pub_date})
+            for item in root.findall(".//item")[:max_articles]:
+                articles.append({
+                    "title": item.find("title").text,
+                    "link": item.find("link").text,
+                    "date": item.find("pubDate").text
+                })
     except Exception:
-        pass
+        st.warning(f"Could not fetch news for {org_name}.")
     return articles
 
-# ---- Basic Risk/Opportunity Assessment ----
+# ---- Risk & Opportunity Assessment ----
 def assess_risks_ops(row):
     risks, ops = [], []
-    if row.get("Hospital overall rating") and row["Hospital overall rating"].isdigit():
-        rating = int(row["Hospital overall rating"])
+    rating = row.get("Hospital overall rating")
+    if rating and rating.isdigit():
+        rating = int(rating)
         if rating <= 2:
             risks.append("Low star rating — potential quality/perception issues.")
         elif rating >= 4:
             ops.append("High star rating — leverage strong reputation.")
     if row.get("Emergency Services") == "No":
         risks.append("No emergency services — may affect patient volume mix.")
-    if "Government" in (row.get("Hospital ownership") or ""):
+    ownership = row.get("Hospital ownership", "")
+    if "Government" in ownership:
         ops.append("Government-owned — may have grant or public funding access.")
     return risks, ops
 
-# ---- Match org/vendor in CMS data (simple substring search) ----
-def match_organization(name, df):
+# ---- Fuzzy search helper ----
+def fuzzy_search(df, search_col, query, cutoff=0.6):
     if df.empty:
-        return None
-    matches = df[df["Hospital Name"].str.contains(name, case=False, na=False)]
-    if not matches.empty:
-        return matches.iloc[0].to_dict()
-    return None
+        return []
+    names = df[search_col].dropna().tolist()
+    matches = get_close_matches(query, names, n=10, cutoff=cutoff)
+    return matches
 
 # ---- Streamlit UI ----
-st.title("🏥 Patient Access Org & Vendor Profiler")
-st.write("Enter an organization or vendor name to get a quick pre-discovery profile using public data.")
+st.set_page_config(page_title="Patient / Vendor Org Profiler", layout="wide")
+st.title("🏥 Patient / Vendor Organization Profiler (Enhanced)")
+
+st.write("""
+Enter a hospital, health system, or vendor name to generate a quick profile using public data.
+The profile includes facility information, recent news, risks & opportunities, and a JSON dossier for download.
+""")
 
 org_name = st.text_input("Organization / Vendor Name")
 df_cms = load_cms_data()
 
-if org_name:
-    st.subheader("🏥 CMS Facility Info (if applicable)")
-    facility_info = match_organization(org_name, df_cms)
-    if facility_info:
-        st.json(facility_info)
-        risks, ops = assess_risks_ops(facility_info)
-    else:
-        st.info("No CMS hospital match found — showing news and generic assessment.")
-        facility_info = {}
-        risks, ops = [], []
+selected_org = None
 
+if org_name:
+    # Fuzzy match CMS hospitals
+    matches = fuzzy_search(df_cms, "Hospital Name", org_name)
+    
+    if matches:
+        st.subheader("⚡ Possible matches found in CMS data:")
+        selected_org = st.selectbox("Select an organization", matches)
+        row = df_cms[df_cms["Hospital Name"] == selected_org].iloc[0].to_dict()
+        st.subheader("🏥 Facility Information")
+        st.json(row)
+    else:
+        st.warning("No CMS matches found. Showing general profile only.")
+        row = {}
+
+    # News
     st.subheader("📰 Recent News")
     news_items = get_news(org_name)
     if news_items:
@@ -88,20 +104,24 @@ if org_name:
     else:
         st.write("No recent news found.")
 
+    # Risks & Opportunities
     st.subheader("⚠️ Risks & 💡 Opportunities")
+    risks, ops = assess_risks_ops(row)
+    st.markdown("**Risks:**")
     if risks:
-        st.markdown("**Risks:**")
         for r in risks: st.write(f"- {r}")
+    else:
+        st.write("- None detected")
+    st.markdown("**Opportunities:**")
     if ops:
-        st.markdown("**Opportunities:**")
         for o in ops: st.write(f"- {o}")
-    if not risks and not ops:
-        st.write("No specific risks or opportunities identified from available data.")
+    else:
+        st.write("- None detected")
 
-    # ---- Download JSON ----
+    # JSON Dossier
     dossier = {
-        "organization_name": org_name,
-        "facility_info": facility_info,
+        "organization": selected_org if selected_org else org_name,
+        "facility_info": row,
         "news": news_items,
         "risks": risks,
         "opportunities": ops,
