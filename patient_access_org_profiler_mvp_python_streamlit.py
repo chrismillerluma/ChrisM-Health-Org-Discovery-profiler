@@ -1,9 +1,8 @@
 import streamlit as st
 import pandas as pd
 import json
-import rapidfuzz
 from datetime import datetime
-from rapidfuzz import process, fuzz
+from rapidfuzz import fuzz
 
 # -----------------------
 # Simulated CMS / Org Data
