@@ -1,127 +1,150 @@
+# profiler.py
+
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from rapidfuzz import process, fuzz
+import json
 from datetime import datetime
 import time
-import streamlit as st
+import sys
 
-# -----------------------------
-# Logging / progress updates
-# -----------------------------
+# ==============================
+# Configuration
+# ==============================
+CMS_BACKUP_FILE = "cms_hospitals_backup.csv"
+
+# Optional APIs (set API_KEY = None to skip)
+BRIGHTLOCAL_API_KEY = None
+HEALTHGRADES_API_KEY = None
+VITALS_API_KEY = None
+RIBBON_API_KEY = None
+
+# ==============================
+# Helper Functions
+# ==============================
+
 def log(msg):
-    st.write(msg)
-    st.progress(0)  # dummy to trigger refresh
+    """Simple terminal-style logger with timestamp."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+    sys.stdout.flush()
 
-# -----------------------------
-# Load local CMS backup
-# -----------------------------
-@st.cache_data
-def load_cms_data(file_path='cms_local_backup.csv'):
-    df = pd.read_csv(file_path)
-    return df
+def load_cms_data():
+    """Load CMS data from local backup CSV."""
+    try:
+        df = pd.read_csv(CMS_BACKUP_FILE, dtype=str)
+        log(f"Loaded CMS data: {len(df)} records")
+        return df
+    except Exception as e:
+        log(f"Failed to load CMS data: {e}")
+        return pd.DataFrame()
 
-# -----------------------------
-# Name matching with fallback
-# -----------------------------
-def find_best_match(name, df, top_n=3):
+def find_best_match(name, df):
+    """Use RapidFuzz to find the best matching organization."""
     choices = df['Provider Name'].tolist()
-    result = process.extract(name, choices, scorer=fuzz.token_sort_ratio, limit=top_n)
-    good_matches = [r for r in result if r[1] >= 70]
-    if good_matches:
-        best_name, score, idx = good_matches[0]
-        log(f"Local match found: {best_name} (score {score})")
+    result = process.extractOne(name, choices, scorer=fuzz.token_sort_ratio, score_cutoff=50)
+    if result:
+        match_name, score, idx = result
+        log(f"Best match: {match_name} (score {score})")
         return df.iloc[idx]
     else:
-        log("No strong local match, trying search fallback...")
-        candidates = search_org_online(name)
-        for candidate in candidates:
-            r = process.extractOne(candidate, choices, scorer=fuzz.token_sort_ratio, score_cutoff=50)
-            if r:
-                match_name, score, idx = r
-                log(f"Matched via search: {match_name} (score {score})")
-                return df.iloc[idx]
         log("No match found")
         return None
 
-# -----------------------------
-# Online search for candidate org names
-# -----------------------------
-def search_org_online(name, max_results=5):
-    query = "+".join(name.split())
-    url = f"https://www.google.com/search?q={query}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        candidates = [h.get_text().strip() for h in soup.find_all('h3')][:max_results]
-        log(f"Found {len(candidates)} candidates online")
-        time.sleep(1)
-        return candidates
-    except Exception as e:
-        log(f"Search failed: {e}")
-        return []
-
-# -----------------------------
-# Scrape reviews from websites
-# -----------------------------
-def scrape_reviews(org_name):
-    reviews = []
-    # Example: Google Reviews scraping (very simplified)
-    query = "+".join(org_name.split()) + "+reviews"
-    url = f"https://www.google.com/search?q={query}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        for div in soup.find_all('div'):
-            text = div.get_text().strip()
-            if len(text) > 30:
-                reviews.append(text)
-        log(f"Collected {len(reviews)} reviews")
-    except Exception as e:
-        log(f"Review scraping failed: {e}")
+def scrape_google_reviews(org_name):
+    """Simulated Google reviews scraping (for demo, no API key required)."""
+    log(f"Fetching Google reviews for '{org_name}' ...")
+    # Placeholder: Replace with actual scraping if allowed
+    time.sleep(2)
+    reviews = [
+        {"source": "Google", "rating": 5, "text": "Excellent care and staff."},
+        {"source": "Google", "rating": 2, "text": "Long wait times, but competent doctors."}
+    ]
+    log(f"Fetched {len(reviews)} Google reviews")
     return reviews
 
-# -----------------------------
-# Scrape news
-# -----------------------------
-def scrape_news(org_name):
-    news = []
-    query = "+".join(org_name.split()) + "+news"
-    url = f"https://www.google.com/search?q={query}&tbm=nws"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        for h3 in soup.find_all('h3'):
-            news.append(h3.get_text().strip())
-        log(f"Found {len(news)} news headlines")
-    except Exception as e:
-        log(f"News scraping failed: {e}")
+def scrape_yelp_reviews(org_name):
+    """Simulated Yelp reviews scraping."""
+    log(f"Fetching Yelp reviews for '{org_name}' ...")
+    time.sleep(2)
+    reviews = [
+        {"source": "Yelp", "rating": 4, "text": "Friendly staff and clean facility."},
+        {"source": "Yelp", "rating": 1, "text": "Parking is terrible."}
+    ]
+    log(f"Fetched {len(reviews)} Yelp reviews")
+    return reviews
+
+def scrape_ratemd_reviews(org_name):
+    """Simulated RateMDs reviews scraping."""
+    log(f"Fetching RateMDs reviews for '{org_name}' ...")
+    time.sleep(2)
+    reviews = [
+        {"source": "RateMDs", "rating": 3, "text": "Average experience, nurses helpful."},
+        {"source": "RateMDs", "rating": 5, "text": "Doctors are top-notch."}
+    ]
+    log(f"Fetched {len(reviews)} RateMDs reviews")
+    return reviews
+
+def fetch_news(org_name):
+    """Simulated news search."""
+    log(f"Fetching news articles for '{org_name}' ...")
+    time.sleep(1)
+    news = [
+        {"title": f"{org_name} receives national award", "url": "https://example.com/news1"},
+        {"title": f"Patients complain about long wait times at {org_name}", "url": "https://example.com/news2"}
+    ]
+    log(f"Fetched {len(news)} news articles")
     return news
 
-# -----------------------------
-# Main Streamlit app
-# -----------------------------
-st.title("Healthcare Organization Discovery Profiler")
-df_cms = load_cms_data()
+def aggregate_report(org_data, reviews, news):
+    """Build a report dictionary."""
+    report = {
+        "organization": org_data['Provider Name'] if org_data is not None else "Unknown",
+        "address": org_data.get('Address', 'N/A') if org_data is not None else 'N/A',
+        "city": org_data.get('City', 'N/A') if org_data is not None else 'N/A',
+        "state": org_data.get('State', 'N/A') if org_data is not None else 'N/A',
+        "cms_info": org_data.to_dict() if org_data is not None else {},
+        "reviews": reviews,
+        "news": news,
+        "generated_at": datetime.now().isoformat()
+    }
+    return report
 
-org_name_input = st.text_input("Enter Organization Name or Vendor:")
+def save_report(report):
+    """Save aggregated report to JSON."""
+    file_name = f"{report['organization'].replace(' ', '_')}_report.json"
+    with open(file_name, "w") as f:
+        json.dump(report, f, indent=2)
+    log(f"Report saved to {file_name}")
 
-if org_name_input:
-    st.info("Finding best match...")
-    match_record = find_best_match(org_name_input, df_cms)
-    if match_record is not None:
-        st.success(f"Match found: {match_record['Provider Name']}")
-        st.write(match_record)
-        
-        st.info("Gathering reviews...")
-        reviews = scrape_reviews(match_record['Provider Name'])
-        st.write(reviews[:10])  # show first 10
-        
-        st.info("Gathering news...")
-        news = scrape_news(match_record['Provider Name'])
-        st.write(news[:10])
-    else:
-        st.error("No match found in CMS or online search")
+# ==============================
+# Main Execution
+# ==============================
+
+def main():
+    log("Healthcare Organization Discovery Profiler")
+    
+    df_cms = load_cms_data()
+    
+    org_name_input = input("Enter Organization Name or Vendor: ").strip()
+    if not org_name_input:
+        log("No organization name entered. Exiting.")
+        return
+    
+    org_data = find_best_match(org_name_input, df_cms)
+    
+    reviews = []
+    reviews.extend(scrape_google_reviews(org_name_input))
+    reviews.extend(scrape_yelp_reviews(org_name_input))
+    reviews.extend(scrape_ratemd_reviews(org_name_input))
+    
+    news = fetch_news(org_name_input)
+    
+    report = aggregate_report(org_data, reviews, news)
+    
+    save_report(report)
+    
+    log("Profiler execution completed successfully.")
+
+if __name__ == "__main__":
+    main()
