@@ -4,26 +4,31 @@ import requests
 import xml.etree.ElementTree as ET
 import json
 from datetime import datetime
+from rapidfuzz import process, fuzz
 
 # ---- Load CMS Hospital Data ----
-@st.cache_data(show_spinner=True)
+@st.cache_data
 def load_cms_data():
     url = "https://data.medicare.gov/api/views/xubh-q36u/rows.csv?accessType=DOWNLOAD"
     try:
         df = pd.read_csv(url, dtype=str)
-        if df.empty:
-            raise ValueError("Live CMS data is empty")
         return df
-    except Exception as e:
-        st.warning(f"⚠️ Could not fetch live CMS data ({e}). Using backup CSV instead.")
+    except Exception:
         try:
             df_backup = pd.read_csv("cms_hospitals_backup.csv", dtype=str)
-            if df_backup.empty:
-                raise ValueError("Backup CSV is empty")
             return df_backup
-        except Exception as e2:
-            st.error(f"Critical error: unable to load any CMS data ({e2})")
-            return pd.DataFrame()  # empty fallback
+        except Exception:
+            return pd.DataFrame()  # fallback empty
+
+# ---- Fuzzy hospital matching ----
+def match_hospital(name, df, threshold=70):
+    if df.empty:
+        return None
+    choices = df["Hospital Name"].dropna().tolist()
+    match, score, idx = process.extractOne(name, choices, scorer=fuzz.WRatio, score_cutoff=threshold)
+    if match:
+        return df.iloc[idx].to_dict()
+    return None
 
 # ---- Get News from Google News RSS ----
 def get_news(org_name):
@@ -46,7 +51,7 @@ def get_news(org_name):
 # ---- Risk/Opportunity Assessment (Hospitals Only) ----
 def assess_risks_ops(row):
     risks, ops = [], []
-    if "Hospital Name" in row:
+    if row:
         if row.get("Hospital overall rating") and row["Hospital overall rating"].isdigit():
             rating = int(row["Hospital overall rating"])
             if rating <= 2:
@@ -60,30 +65,26 @@ def assess_risks_ops(row):
     return risks, ops
 
 # ---- Streamlit UI ----
-st.title("🏥 Patient Access / Vendor Org Profiler")
+st.title("🏥 Patient & Vendor Org Profiler")
 st.write("Enter any organization or vendor name to generate a pre-discovery profile using only public data.")
 
 org_name = st.text_input("Organization or Vendor Name")
 df_cms = load_cms_data()
 
 if org_name:
-    if not df_cms.empty:
-        matches = df_cms[df_cms["Hospital Name"].str.contains(org_name, case=False, na=False)]
+    # Try hospital match first
+    hospital_info = match_hospital(org_name, df_cms)
+    if hospital_info:
+        st.success(f"Matched hospital: {hospital_info['Hospital Name']}")
+        risks, ops = assess_risks_ops(hospital_info)
     else:
-        matches = pd.DataFrame()
-
-    if matches.empty:
-        st.info("No hospital matches found. Treating as vendor or non-hospital organization.")
-        row = {"Name": org_name}
+        st.info("No hospital match found. Treating as vendor or non-hospital organization.")
+        hospital_info = None
         risks, ops = [], []
-    else:
-        st.success(f"Found {len(matches)} hospital match(es). Showing first result.")
-        row = matches.iloc[0].to_dict()
-        risks, ops = assess_risks_ops(row)
 
-    # ---- Facility / Vendor Info ----
+    # ---- Org Info ----
     st.subheader("🏢 Organization Information")
-    st.json(row)
+    st.json(hospital_info if hospital_info else {"Name": org_name})
 
     # ---- News ----
     st.subheader("📰 Recent News")
@@ -107,7 +108,7 @@ if org_name:
     # ---- Download JSON ----
     dossier = {
         "organization": org_name,
-        "facility_info": row,
+        "hospital_info": hospital_info,
         "news": news_items,
         "risks": risks,
         "opportunities": ops,
