@@ -11,6 +11,7 @@ import streamlit as st
 # -----------------------------
 def log(msg):
     st.write(msg)
+    st.progress(0)  # dummy to trigger refresh
 
 # -----------------------------
 # Load local CMS backup
@@ -23,7 +24,7 @@ def load_cms_data(file_path='cms_local_backup.csv'):
 # -----------------------------
 # Name matching with fallback
 # -----------------------------
-def find_best_match(name, df, top_n=5):
+def find_best_match(name, df, top_n=3):
     choices = df['Provider Name'].tolist()
     result = process.extract(name, choices, scorer=fuzz.token_sort_ratio, limit=top_n)
     good_matches = [r for r in result if r[1] >= 70]
@@ -62,83 +63,24 @@ def search_org_online(name, max_results=5):
         return []
 
 # -----------------------------
-# Scrape reviews from multiple sites
+# Scrape reviews from websites
 # -----------------------------
 def scrape_reviews(org_name):
     reviews = []
-
-    # ---- Google Reviews ----
+    # Example: Google Reviews scraping (very simplified)
+    query = "+".join(org_name.split()) + "+reviews"
+    url = f"https://www.google.com/search?q={query}"
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        query = "+".join(org_name.split()) + "+reviews"
-        url = f"https://www.google.com/search?q={query}"
-        headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(resp.text, 'html.parser')
         for div in soup.find_all('div'):
             text = div.get_text().strip()
             if len(text) > 30:
-                reviews.append(f"Google: {text}")
-        time.sleep(1)
+                reviews.append(text)
+        log(f"Collected {len(reviews)} reviews")
     except Exception as e:
-        log(f"Google review scrape failed: {e}")
-
-    # ---- Yelp ----
-    try:
-        query = "+".join(org_name.split()) + "+site:yelp.com"
-        url = f"https://www.google.com/search?q={query}"
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        for h3 in soup.find_all('h3'):
-            text = h3.get_text().strip()
-            if len(text) > 20:
-                reviews.append(f"Yelp candidate: {text}")
-        time.sleep(1)
-    except Exception as e:
-        log(f"Yelp review scrape failed: {e}")
-
-    # ---- Healthgrades ----
-    try:
-        query = "+".join(org_name.split()) + "+site:healthgrades.com"
-        url = f"https://www.google.com/search?q={query}"
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        for h3 in soup.find_all('h3'):
-            text = h3.get_text().strip()
-            if len(text) > 20:
-                reviews.append(f"Healthgrades candidate: {text}")
-        time.sleep(1)
-    except Exception as e:
-        log(f"Healthgrades scrape failed: {e}")
-
-    # ---- Vitals ----
-    try:
-        query = "+".join(org_name.split()) + "+site:vitals.com"
-        url = f"https://www.google.com/search?q={query}"
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        for h3 in soup.find_all('h3'):
-            text = h3.get_text().strip()
-            if len(text) > 20:
-                reviews.append(f"Vitals candidate: {text}")
-        time.sleep(1)
-    except Exception as e:
-        log(f"Vitals scrape failed: {e}")
-
-    # ---- RateMDs ----
-    try:
-        query = "+".join(org_name.split()) + "+site:ratemds.com"
-        url = f"https://www.google.com/search?q={query}"
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        for h3 in soup.find_all('h3'):
-            text = h3.get_text().strip()
-            if len(text) > 20:
-                reviews.append(f"RateMDs candidate: {text}")
-        time.sleep(1)
-    except Exception as e:
-        log(f"RateMDs scrape failed: {e}")
-
-    log(f"Collected {len(reviews)} reviews")
+        log(f"Review scraping failed: {e}")
     return reviews
 
 # -----------------------------
@@ -154,7 +96,6 @@ def scrape_news(org_name):
         soup = BeautifulSoup(resp.text, 'html.parser')
         for h3 in soup.find_all('h3'):
             news.append(h3.get_text().strip())
-        time.sleep(1)
         log(f"Found {len(news)} news headlines")
     except Exception as e:
         log(f"News scraping failed: {e}")
@@ -175,12 +116,12 @@ if org_name_input:
         st.success(f"Match found: {match_record['Provider Name']}")
         st.write(match_record)
         
-        st.info("Gathering reviews (may take a while)...")
+        st.info("Gathering reviews...")
         reviews = scrape_reviews(match_record['Provider Name'])
-        st.write(reviews[:20])  # show first 20
+        st.write(reviews[:10])  # show first 10
         
         st.info("Gathering news...")
         news = scrape_news(match_record['Provider Name'])
-        st.write(news[:20])
+        st.write(news[:10])
     else:
         st.error("No match found in CMS or online search")
