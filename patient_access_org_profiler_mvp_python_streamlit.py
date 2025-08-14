@@ -4,8 +4,8 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 import json
-import time
 from rapidfuzz import process, fuzz
+import time
 
 # --------------------------
 # Helper functions
@@ -32,90 +32,44 @@ def fuzzy_search(name, choices, limit=5):
     results = process.extract(name, choices, scorer=fuzz.WRatio, limit=limit)
     return results
 
-def fetch_news(org_name, log_func):
-    """Fetch recent news from Google News RSS"""
-    log_func("Fetching news...")
-    rss_url = f"https://news.google.com/rss/search?q={org_name.replace(' ','+')}"
+def log(msg, log_list):
+    """Append log message"""
+    log_list.append(msg)
+    st.session_state['log_area'] = "\n".join(log_list)
+
+def fetch_source(url, log_list, desc, parse_fn=None):
+    """Generic fetch function with logging"""
+    log(f"Fetching {desc}...", log_list)
+    headers = {"User-Agent":"Mozilla/5.0"}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200 and parse_fn:
+            return parse_fn(r)
+        return r.text
+    except Exception as e:
+        log(f"{desc} fetch error: {e}", log_list)
+        return []
+
+def parse_news(r):
+    root = BeautifulSoup(r.content, features="xml")
     articles = []
-    try:
-        r = requests.get(rss_url, timeout=10)
-        if r.status_code == 200:
-            root = BeautifulSoup(r.content, features="xml")
-            for item in root.find_all("item")[:5]:
-                articles.append({
-                    "title": item.title.text,
-                    "link": item.link.text,
-                    "pubDate": item.pubDate.text
-                })
-        return articles
-    except Exception as e:
-        log_func(f"Error fetching news: {e}")
-        return []
+    for item in root.find_all("item")[:5]:
+        articles.append({
+            "title": item.title.text,
+            "link": item.link.text,
+            "pubDate": item.pubDate.text
+        })
+    return articles
 
-def fetch_reviews_google(org_name, log_func):
-    """Scrape basic Google search results for reviews summary"""
-    log_func("Fetching Google reviews summary...")
-    search_url = f"https://www.google.com/search?q={org_name.replace(' ','+') + '+reviews'}"
-    headers = {"User-Agent":"Mozilla/5.0"}
-    reviews = []
-    try:
-        r = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        snippets = soup.find_all("span")
-        for s in snippets[:5]:
-            reviews.append(s.get_text())
-        return reviews
-    except Exception as e:
-        log_func(f"Google reviews fetch error: {e}")
-        return []
-
-def fetch_reviews_yelp(org_name, log_func):
-    """Scrape Yelp search page for review snippets"""
-    log_func("Fetching Yelp reviews summary...")
-    search_url = f"https://www.yelp.com/search?find_desc={org_name.replace(' ','+')}"
-    headers = {"User-Agent":"Mozilla/5.0"}
-    reviews = []
-    try:
-        r = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        for snippet in soup.find_all("p")[:5]:
-            reviews.append(snippet.get_text())
-        return reviews
-    except Exception as e:
-        log_func(f"Yelp reviews fetch error: {e}")
-        return []
-
-def fetch_reviews_ratemds(org_name, log_func):
-    """Scrape RateMDs reviews"""
-    log_func("Fetching RateMDs reviews...")
-    search_url = f"https://www.ratemds.com/search/?q={org_name.replace(' ','+')}"
-    headers = {"User-Agent":"Mozilla/5.0"}
-    reviews = []
-    try:
-        r = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        for snippet in soup.find_all("p")[:5]:
-            reviews.append(snippet.get_text())
-        return reviews
-    except Exception as e:
-        log_func(f"RateMDs fetch error: {e}")
-        return []
-
-def fetch_reviews_healthgrades(org_name, log_func):
-    """Scrape Healthgrades reviews"""
-    log_func("Fetching Healthgrades reviews...")
-    search_url = f"https://www.healthgrades.com/usearch?what={org_name.replace(' ','+')}"
-    headers = {"User-Agent":"Mozilla/5.0"}
-    reviews = []
-    try:
-        r = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        for snippet in soup.find_all("p")[:5]:
-            reviews.append(snippet.get_text())
-        return reviews
-    except Exception as e:
-        log_func(f"Healthgrades fetch error: {e}")
-        return []
+def parse_reviews(r):
+    """Extract longer text snippets only"""
+    soup = BeautifulSoup(r, "html.parser")
+    snippets = []
+    for p in soup.find_all("p"):
+        text = p.get_text().strip()
+        if len(text) > 20:
+            snippets.append(text)
+    return snippets[:5]
 
 def assess_facility(row):
     """Summarize key CMS info"""
@@ -140,46 +94,58 @@ st.title("🏥 Patient Access Org Profiler — Sales Call Prep")
 
 org_name_input = st.text_input("Organization or Vendor Name")
 
-log_window = st.empty()  # placeholder for log/progress
+if 'log_area' not in st.session_state:
+    st.session_state['log_area'] = ""
 
-def log(msg):
-    log_window.text_area("Progress", value=msg, height=200)
+log_window = st.text_area("Progress Log", value=st.session_state['log_area'], height=200)
+
+progress = st.progress(0)
 
 df_cms = load_cms_data()
+log_list = []
 
 if org_name_input:
     st.info("Searching CMS database for best matches...")
     matches = fuzzy_search(org_name_input, df_cms["Hospital Name"].tolist())
     st.write("Top matches from CMS data (fuzzy):")
     st.write(matches)
+    progress.progress(10)
 
     if matches:
         best_match_name = matches[0][0]
         row = df_cms[df_cms["Hospital Name"]==best_match_name].iloc[0].to_dict()
-
         st.subheader("🏥 Facility Information")
         st.json(row)
+        progress.progress(20)
 
-        # Fetch data from multiple sources
-        all_news = fetch_news(org_name_input, log)
-        google_reviews = fetch_reviews_google(org_name_input, log)
-        yelp_reviews = fetch_reviews_yelp(org_name_input, log)
-        ratemds_reviews = fetch_reviews_ratemds(org_name_input, log)
-        healthgrades_reviews = fetch_reviews_healthgrades(org_name_input, log)
+        # Fetching multiple sources with progress updates
+        news = fetch_source(f"https://news.google.com/rss/search?q={org_name_input.replace(' ','+')}", log_list, "News", parse_news)
+        progress.progress(40)
+        google_reviews = fetch_source(f"https://www.google.com/search?q={org_name_input.replace(' ','+') + '+reviews'}", log_list, "Google Reviews", parse_reviews)
+        progress.progress(55)
+        yelp_reviews = fetch_source(f"https://www.yelp.com/search?find_desc={org_name_input.replace(' ','+')}", log_list, "Yelp Reviews", parse_reviews)
+        progress.progress(70)
+        ratemds_reviews = fetch_source(f"https://www.ratemds.com/search/?q={org_name_input.replace(' ','+')}", log_list, "RateMDs Reviews", parse_reviews)
+        progress.progress(85)
+        healthgrades_reviews = fetch_source(f"https://www.healthgrades.com/usearch?what={org_name_input.replace(' ','+')}", log_list, "Healthgrades Reviews", parse_reviews)
+        progress.progress(100)
 
+        # Display News
         st.subheader("📰 Recent News")
-        if all_news:
-            for article in all_news:
+        if news:
+            for article in news:
                 st.markdown(f"- [{article['title']}]({article['link']}) ({article['pubDate']})")
         else:
             st.write("No news found.")
 
+        # Display Reviews
         st.subheader("⭐ Reviews Highlights")
         st.markdown("**Google:**"); st.write(google_reviews)
         st.markdown("**Yelp:**"); st.write(yelp_reviews)
         st.markdown("**RateMDs:**"); st.write(ratemds_reviews)
         st.markdown("**Healthgrades:**"); st.write(healthgrades_reviews)
 
+        # Risks & Opportunities
         st.subheader("⚠️ Risks & 💡 Opportunities")
         risks, ops = assess_facility(row)
         st.markdown("**Risks:**")
@@ -187,10 +153,10 @@ if org_name_input:
         st.markdown("**Opportunities:**")
         for o in ops: st.write(f"- {o}")
 
-        # Download JSON report
+        # JSON download
         dossier = {
             "facility_info": row,
-            "news": all_news,
+            "news": news,
             "reviews": {
                 "google": google_reviews,
                 "yelp": yelp_reviews,
