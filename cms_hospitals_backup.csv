@@ -1,0 +1,6 @@
+Provider ID,Hospital Name,Address,City,State,ZIP Code,County Name,Phone Number,Hospital Type,Hospital Ownership,Emergency Services,Hospital overall rating
+10001,Mayo Clinic Hospital,200 First St SW,Rochester,MN,55905,Olmsted,(507) 284-2511,Acute Care Hospitals,Government - Hospital District or Authority,Yes,5
+10002,Cedars-Sinai Medical Center,8700 Beverly Blvd,Los Angeles,CA,90048,Los Angeles,(310) 423-3277,Acute Care Hospitals,Voluntary non-profit - Private,Yes,4
+10003,Massachusetts General Hospital,55 Fruit St,Boston,MA,02114,Suffolk,(617) 726-2000,Acute Care Hospitals,Voluntary non-profit - Private,Yes,5
+10004,Johns Hopkins Hospital,1800 Orleans St,Baltimore,MD,21287,Baltimore City,(410) 955-5000,Acute Care Hospitals,Voluntary non-profit - Private,Yes,4
+10005,Community Health Hospital,123 Main St,Smalltown,TX,75001,Denton,(972) 555-1234,Acute Care Hospitals,Government - Local,No,2
