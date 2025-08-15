@@ -71,24 +71,46 @@ def fetch_news(name, limit=5):
         return []
 
 def fetch_reviews(name, api_key=None):
+    reviews = []
     if api_key:
         try:
-            url = (
+            # Search for place_id first
+            search_url = (
                 "https://maps.googleapis.com/maps/api/place/textsearch/json"
                 f"?query={requests.utils.quote(name)}&key={api_key}"
             )
-            data = requests.get(url, timeout=10).json()
-            return data.get("results", [])
-        except Exception:
-            pass
-    # fallback scraping
+            search_data = requests.get(search_url, timeout=10).json()
+            results = search_data.get("results")
+            if results:
+                place_id = results[0]["place_id"]
+                details_url = (
+                    "https://maps.googleapis.com/maps/api/place/details/json"
+                    f"?place_id={place_id}&fields=name,rating,reviews&key={api_key}"
+                )
+                details_data = requests.get(details_url, timeout=10).json()
+                place_reviews = details_data.get("result", {}).get("reviews", [])
+                # Keep top 3 good and top 3 bad reviews
+                if place_reviews:
+                    sorted_reviews = sorted(place_reviews, key=lambda x: x.get("rating", 0), reverse=True)
+                    top_good = sorted_reviews[:3]
+                    top_bad = sorted_reviews[-3:]
+                    reviews = {"good": top_good, "bad": top_bad}
+                    return reviews
+        except Exception as e:
+            st.warning(f"Google Places API failed: {e}")
+
+    # Fallback scraping (less reliable, just text snippets)
     try:
         query = requests.utils.quote(name + " reviews")
         r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-        return [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:5]
-    except Exception:
-        return []
+        snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:10]
+        mid = len(snippets) // 2
+        reviews = {"good": snippets[:mid], "bad": snippets[mid:]}
+    except Exception as e:
+        st.warning(f"Fallback review scraping failed: {e}")
+
+    return reviews
 
 df_cms = load_cms()
 org = st.text_input("Organization Name (e.g., UCSF Medical Center)")
@@ -101,18 +123,26 @@ if org:
     if match is not None:
         st.subheader("Facility Info")
         st.json(match.to_dict())
-        
+
         with st.spinner("Fetching Google News..."):
             news = fetch_news(match.get("Hospital Name") or match.get(match.index[0]), limit=5)
         st.subheader("Recent News")
         for n in news:
             st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
-        
+
         with st.spinner("Fetching Reviews..."):
             revs = fetch_reviews(org, gkey)
-        st.subheader("Google Reviews (or Fallback)")
-        st.write(revs)
-        
+        st.subheader("Top Reviews")
+        st.markdown("**Positive:**")
+        for r in revs.get("good", []):
+            st.write(f"- {r.get('text', r) if isinstance(r, dict) else r} "
+                     f"(Rating: {r.get('rating','N/A') if isinstance(r, dict) else 'N/A'})")
+
+        st.markdown("**Negative:**")
+        for r in revs.get("bad", []):
+            st.write(f"- {r.get('text', r) if isinstance(r, dict) else r} "
+                     f"(Rating: {r.get('rating','N/A') if isinstance(r, dict) else 'N/A'})")
+
         profile = {
             "org_input": org,
             "matched_name": match.get("Hospital Name") or match.to_dict(),
@@ -120,7 +150,10 @@ if org:
             "reviews": revs,
             "timestamp": datetime.utcnow().isoformat()
         }
-        st.download_button("Download Profile", json.dumps(profile, indent=2), f"{org.replace(' ','_')}_profile.json")
+        st.download_button(
+            "Download Profile",
+            json.dumps(profile, indent=2),
+            f"{org.replace(' ','_')}_profile.json"
+        )
     else:
         st.error("No match could be found.")
-
