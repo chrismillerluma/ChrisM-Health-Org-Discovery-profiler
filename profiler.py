@@ -156,14 +156,23 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
         except Exception as e:
             st.warning(f"Failed to fetch reviews from API: {e}")
 
-    # 2️⃣ Google Search Snippets
+    # 2️⃣ Google Search Snippets fallback (improved)
     if len(reviews_data) < max_reviews:
         try:
             remaining = max_reviews - len(reviews_data)
             query = requests.utils.quote(name + " reviews")
             r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
             soup = BeautifulSoup(r.text, "html.parser")
-            snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:remaining]
+            
+            review_spans = soup.find_all("span")
+            snippets = []
+            for span in review_spans:
+                text = span.get_text()
+                if len(text) > 30 and "review" in text.lower():
+                    snippets.append(text)
+                if len(snippets) >= remaining:
+                    break
+            
             for s in snippets:
                 reviews_data.append({
                     "name": place.get("name") if place else None,
@@ -178,6 +187,36 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
             pass
 
     return reviews_data[:max_reviews], place
+
+# -------------------------
+# Fetch About Info from Website
+# -------------------------
+def fetch_about_info(website):
+    about_info = {}
+    try:
+        if website:
+            if not website.startswith("http"):
+                website = "https://" + website
+            r = requests.get(website, timeout=10, headers={"User-Agent":"Mozilla/5.0"})
+            soup = BeautifulSoup(r.text, "html.parser")
+            
+            # Meta description
+            meta_desc = soup.find("meta", attrs={"name": "description"})
+            about_info["meta_description"] = meta_desc["content"] if meta_desc else None
+            
+            # First 5 paragraphs
+            paragraphs = soup.find_all("p")
+            about_info["main_text"] = " ".join([p.get_text().strip() for p in paragraphs[:5]])
+            
+            # Try /about page
+            about_page = requests.get(website.rstrip("/") + "/about", timeout=10, headers={"User-Agent":"Mozilla/5.0"})
+            soup_about = BeautifulSoup(about_page.text, "html.parser")
+            paragraphs_about = soup_about.find_all("p")
+            if paragraphs_about:
+                about_info["about_page_text"] = " ".join([p.get_text().strip() for p in paragraphs_about[:5]])
+    except Exception as e:
+        about_info["error"] = str(e)
+    return about_info
 
 # -------------------------
 # Main App
@@ -217,6 +256,9 @@ if org and search_button:
         for n in news:
             st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
 
+        # -------------------------
+        # Reviews & Business Profile
+        # -------------------------
         with st.spinner("Fetching Reviews and Business Profile..."):
             revs, place_info = fetch_reviews(org, gkey, max_reviews=25)
 
@@ -228,51 +270,17 @@ if org and search_button:
                 if col not in df_revs.columns:
                     df_revs[col] = None
             if "rating" in df_revs.columns and df_revs["rating"].notna().any():
-                df_revs = df_revs.sort_values("rating", ascending=True)
-            st.dataframe(df_revs[expected_cols].head(25))
+                df_revs = df_revs.sort_values(by="rating", ascending=False)
+            st.dataframe(df_revs[expected_cols])
         else:
             st.info("No reviews found.")
 
-        st.subheader("Google Business Profile Info")
-        if place_info:
-            st.json({
-                "name": place_info.get("name"),
-                "address": place_info.get("formatted_address"),
-                "rating": place_info.get("rating"),
-                "user_ratings_total": place_info.get("user_ratings_total"),
-                "phone": place_info.get("formatted_phone_number"),
-                "international_phone": place_info.get("international_phone_number"),
-                "website": place_info.get("website"),
-                "opening_hours": place_info.get("opening_hours"),
-                "geometry": place_info.get("geometry"),
-                "types": place_info.get("types"),
-                "place_id": place_info.get("place_id")
-            })
-
-        with st.spinner("Calculating Business Performance / Reputation Score..."):
-            try:
-                if place_info:
-                    rating = place_info.get("rating", 0)
-                    total_reviews = place_info.get("user_ratings_total", 1)
-                    rep_score = round(rating * min(total_reviews / 100, 1) * 20, 2)
-                    st.subheader("Business Performance / Reputation Score")
-                    st.markdown(f"- **Score (0-20)**: {rep_score}")
-                    st.markdown(f"- **Rating**: {rating} / 5")
-                    st.markdown(f"- **Total Reviews**: {total_reviews}")
-                else:
-                    st.info("Google Places API key required to calculate reputation score.")
-            except Exception as e:
-                st.warning(f"Could not calculate performance score: {e}")
-
-        profile = {
-            "org_input": org,
-            "matched_name": match.get("Hospital Name") or match.to_dict(),
-            "news": news,
-            "reviews": revs,
-            "business_profile": place_info,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        st.download_button("Download Profile", json.dumps(profile, indent=2),
-                           f"{org.replace(' ','_')}_profile.json")
-    else:
-        st.error("No match could be found.")
+        # -------------------------
+        # About Section
+        # -------------------------
+        st.subheader("Organization About Info")
+        if place_info.get("website"):
+            about_data = fetch_about_info(place_info["website"])
+            st.json(about_data)
+        else:
+            st.info("No website available to fetch About information.")
