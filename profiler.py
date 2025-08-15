@@ -122,7 +122,6 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
     reviews_data = []
     place = {}
 
-    # 1️⃣ Google Places API
     if api_key:
         try:
             search_url = (
@@ -156,7 +155,6 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
         except Exception as e:
             st.warning(f"Failed to fetch reviews from API: {e}")
 
-    # 2️⃣ Google Search Snippets (fill in if API didn't reach max_reviews)
     if len(reviews_data) < max_reviews:
         try:
             remaining = max_reviews - len(reviews_data)
@@ -236,9 +234,6 @@ if org and search_button:
         for n in news:
             st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
 
-        # -------------------------
-        # Reviews & Business Profile
-        # -------------------------
         with st.spinner("Fetching Reviews and Business Profile..."):
             revs, place_info = fetch_reviews(org, gkey, max_reviews=25)
 
@@ -271,17 +266,11 @@ if org and search_button:
                 "place_id": place_info.get("place_id")
             })
 
-        # -------------------------
-        # Scrape About Info
-        # -------------------------
         about_data = scrape_about(place_info.get("website") if place_info else None)
         if about_data:
             st.subheader("About Information (Scraped from Website)")
             st.json(about_data)
 
-        # -------------------------
-        # Reputation Score
-        # -------------------------
         with st.spinner("Calculating Business Performance / Reputation Score..."):
             try:
                 if place_info:
@@ -296,7 +285,7 @@ if org and search_button:
                     st.info("Google Places API key required to calculate reputation score.")
             except Exception as e:
                 st.warning(f"Could not calculate performance score: {e}")
-
+        
         # -------------------------
         # Download Full Profile
         # -------------------------
@@ -309,7 +298,7 @@ if org and search_button:
             "about_info": about_data,
             "timestamp": datetime.utcnow().isoformat()
         }
-
+        
         st.subheader("Download Full Profile")
         # JSON
         json_bytes = json.dumps(profile_data, indent=2).encode('utf-8')
@@ -320,4 +309,12 @@ if org and search_button:
             mime="application/json"
         )
         # CSV (reviews only)
-        if
+        if revs:
+            df_revs_download = pd.DataFrame(revs)
+            csv_bytes = df_revs_download.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Download Reviews as CSV",
+                data=csv_bytes,
+                file_name=f"{normalize_name(org)}_reviews.csv",
+                mime="text/csv"
+            )
