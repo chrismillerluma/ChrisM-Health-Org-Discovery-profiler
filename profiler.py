@@ -125,7 +125,7 @@ def fetch_reviews(name, api_key=None):
         try:
             url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={requests.utils.quote(name)}&key={api_key}"
             data = requests.get(url, timeout=10).json()
-            for r in data.get("results", [])[:25]:
+            for r in data.get("results", [])[:25]:  # fetch max 25 for worst reviews
                 reviews_data.append({
                     "name": r.get("name"),
                     "rating": r.get("rating"),
@@ -136,6 +136,7 @@ def fetch_reviews(name, api_key=None):
             return reviews_data
         except Exception:
             pass
+    # Fallback scraping snippets
     try:
         query = requests.utils.quote(name + " reviews")
         r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
@@ -146,15 +147,6 @@ def fetch_reviews(name, api_key=None):
         return reviews_data
     except Exception:
         return []
-
-# -------------------------
-# Wrap all text columns
-# -------------------------
-def wrap_text_columns(df, width=80):
-    for col in df.columns:
-        if df[col].dtype == object:
-            df[col] = df[col].apply(lambda x: x if pd.isna(x) else "\n".join([str(x)[i:i+width] for i in range(0, len(str(x)), width)]))
-    return df
 
 # -------------------------
 # Main App
@@ -212,7 +204,11 @@ if org and search_button:
                 df_worst = df_revs.head(25)
 
             st.subheader("Top 25 Worst Reviews")
-            df_worst = wrap_text_columns(df_worst)  # wrap all text columns
+            
+            # Apply text wrapping for 'snippet' column
+            if 'snippet' in df_worst.columns:
+                df_worst['snippet'] = df_worst['snippet'].apply(lambda x: x if pd.isna(x) else "\n".join([x[i:i+80] for i in range(0, len(x), 80)]))
+            
             st.dataframe(df_worst[expected_cols])
         else:
             st.info("No reviews found.")
