@@ -120,7 +120,6 @@ def fetch_news(name, limit=5):
 # Fetch Reviews (simplified)
 # -------------------------
 def fetch_reviews(name, api_key=None):
-	# Try Google Places API first if key provided
     reviews_data = []
     if api_key:
         try:
@@ -164,13 +163,13 @@ if org and search_button:
         for hit in google_hits:
             st.markdown(f"- [{hit['title']}]({hit['link']}) — {hit['snippet']}")
 		
-		# Try extracting state/city from top hit snippets
+        # Try extracting state/city from top hit snippets
         city, state = None, None
         for hit in google_hits:
             snippet = hit['snippet']
-            match = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
-            if match:
-                city, state = match.group(1), match.group(2)
+            match_snip = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
+            if match_snip:
+                city, state = match_snip.group(1), match_snip.group(2)
                 break
 
     with st.spinner("Matching organization..."):
@@ -191,28 +190,27 @@ if org and search_button:
             revs = fetch_reviews(org, gkey)
 
         st.subheader("Reviews Table")
-if revs:
-    df_revs = pd.DataFrame(revs)
-    expected_cols = ["name", "rating", "user_ratings_total", "address", "snippet"]
-    for col in expected_cols:
-        if col not in df_revs.columns:
-            df_revs[col] = None
-    st.dataframe(df_revs[expected_cols])
+        if revs:
+            df_revs = pd.DataFrame(revs)
+            expected_cols = ["name", "rating", "user_ratings_total", "address", "snippet"]
+            for col in expected_cols:
+                if col not in df_revs.columns:
+                    df_revs[col] = None
+            st.dataframe(df_revs[expected_cols])
 
-    # Show top 5 best reviews
-    if "rating" in df_revs.columns and df_revs["rating"].notna().any():
-        st.subheader("Top 5 Best Reviews")
-        df_best = df_revs.sort_values("rating", ascending=False).head(5)
-        st.dataframe(df_best[expected_cols])
+            # Show top 5 best reviews
+            if "rating" in df_revs.columns and df_revs["rating"].notna().any():
+                st.subheader("Top 5 Best Reviews")
+                df_best = df_revs.sort_values("rating", ascending=False).head(5)
+                st.dataframe(df_best[expected_cols])
 
-        st.subheader("Top 5 Worst Reviews")
-        df_worst = df_revs.sort_values("rating", ascending=True).head(5)
-        st.dataframe(df_worst[expected_cols])
-else:
-    st.info("No reviews found.")
+                st.subheader("Top 5 Worst Reviews")
+                df_worst = df_revs.sort_values("rating", ascending=True).head(5)
+                st.dataframe(df_worst[expected_cols])
         else:
             st.info("No reviews found.")
 
+        # Profile download
         profile = {
             "org_input": org,
             "matched_name": match.get("Hospital Name") or match.to_dict(),
@@ -220,7 +218,10 @@ else:
             "reviews": revs,
             "timestamp": datetime.utcnow().isoformat()
         }
-        st.download_button("Download Profile", json.dumps(profile, indent=2),
-                           f"{org.replace(' ','_')}_profile.json")
+        st.download_button(
+            "Download Profile",
+            json.dumps(profile, indent=2),
+            f"{org.replace(' ','_')}_profile.json"
+        )
     else:
         st.error("No match could be found.")
