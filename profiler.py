@@ -94,7 +94,6 @@ def match_org(name, df, state=None, city=None):
         _, score, idx = match
         return df_filtered.iloc[idx], col, f"Matched '{choices[idx]}' (score {score})"
     
-    # Fallback
     subs = df_filtered[df_filtered[col].str.contains(name, case=False, na=False)]
     if not subs.empty:
         return subs.iloc[0], col, f"Substring fallback: '{subs.iloc[0][col]}'"
@@ -117,24 +116,45 @@ def fetch_news(name, limit=5):
         return []
 
 # -------------------------
-# Fetch Reviews (simplified)
+# Fetch Reviews with real text
 # -------------------------
 def fetch_reviews(name, api_key=None):
     reviews_data = []
+
     if api_key:
         try:
-            url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={requests.utils.quote(name)}&key={api_key}"
-            data = requests.get(url, timeout=10).json()
-            for r in data.get("results", [])[:5]:
-                reviews_data.append({
-                    "name": r.get("name"),
-                    "rating": r.get("rating"),
-                    "user_ratings_total": r.get("user_ratings_total"),
-                    "address": r.get("formatted_address")
-                })
+            # Step 1: Text Search to get place_id
+            search_url = (
+                f"https://maps.googleapis.com/maps/api/place/textsearch/json?"
+                f"query={requests.utils.quote(name)}&key={api_key}"
+            )
+            search_resp = requests.get(search_url, timeout=10).json()
+            results = search_resp.get("results", [])
+            if results:
+                place_id = results[0].get("place_id")
+                if place_id:
+                    # Step 2: Place Details to get reviews
+                    details_url = (
+                        f"https://maps.googleapis.com/maps/api/place/details/json?"
+                        f"place_id={place_id}&fields=name,reviews,formatted_address,rating,user_ratings_total"
+                        f"&key={api_key}"
+                    )
+                    details_resp = requests.get(details_url, timeout=10).json()
+                    place = details_resp.get("result", {})
+                    for r in place.get("reviews", [])[:10]:  # get up to 10 reviews
+                        reviews_data.append({
+                            "name": place.get("name"),
+                            "address": place.get("formatted_address"),
+                            "rating": r.get("rating"),
+                            "user_ratings_total": place.get("user_ratings_total"),
+                            "author_name": r.get("author_name"),
+                            "review_text": r.get("text"),
+                            "time": datetime.utcfromtimestamp(r.get("time")).isoformat() if r.get("time") else None
+                        })
             return reviews_data
-        except Exception:
-            pass
+        except Exception as e:
+            st.warning(f"Failed to fetch reviews from API: {e}")
+
     # Fallback scraping Google search snippets
     try:
         query = requests.utils.quote(name + " reviews")
@@ -142,7 +162,7 @@ def fetch_reviews(name, api_key=None):
         soup = BeautifulSoup(r.text, "html.parser")
         snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:5]
         for s in snippets:
-            reviews_data.append({"snippet": s})
+            reviews_data.append({"review_text": s})
         return reviews_data
     except Exception:
         return []
@@ -162,14 +182,14 @@ if org and search_button:
         st.subheader("Top Google Search Hits")
         for hit in google_hits:
             st.markdown(f"- [{hit['title']}]({hit['link']}) — {hit['snippet']}")
-		
+
         # Try extracting state/city from top hit snippets
         city, state = None, None
         for hit in google_hits:
             snippet = hit['snippet']
-            match = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
-            if match:
-                city, state = match.group(1), match.group(2)
+            match_loc = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
+            if match_loc:
+                city, state = match_loc.group(1), match_loc.group(2)
                 break
 
     with st.spinner("Matching organization..."):
@@ -192,28 +212,21 @@ if org and search_button:
         st.subheader("Reviews Table")
         if revs:
             df_revs = pd.DataFrame(revs)
-            expected_cols = ["name", "rating", "user_ratings_total", "address", "snippet"]
+            expected_cols = ["name", "author_name", "rating", "user_ratings_total", "address", "review_text", "time"]
             for col in expected_cols:
                 if col not in df_revs.columns:
                     df_revs[col] = None
             st.dataframe(df_revs[expected_cols])
 
-            # Show top 5 best reviews (keep metadata)
+            # Show top 5 best reviews
             if "rating" in df_revs.columns and df_revs["rating"].notna().any():
                 st.subheader("Top 5 Best Reviews")
                 df_best = df_revs.sort_values("rating", ascending=False).head(5)
                 st.dataframe(df_best[expected_cols])
 
-            # Show top 5 worst reviews using review text
-            st.subheader("Top 5 Worst Reviews")
-            if "rating" in df_revs.columns and df_revs["rating"].notna().any():
+                st.subheader("Top 5 Worst Reviews")
                 df_worst = df_revs.sort_values("rating", ascending=True).head(5)
-                if "snippet" in df_worst.columns and df_worst["snippet"].notna().any():
-                    df_worst_display = df_worst[["snippet", "rating", "user_ratings_total"]]
-                    df_worst_display = df_worst_display.rename(columns={"snippet": "review_text"})
-                else:
-                    df_worst_display = df_worst[expected_cols]
-                st.dataframe(df_worst_display)
+                st.dataframe(df_worst[["author_name","review_text","rating","time"]])
         else:
             st.info("No reviews found.")
 
@@ -224,10 +237,7 @@ if org and search_button:
             "reviews": revs,
             "timestamp": datetime.utcnow().isoformat()
         }
-        st.download_button(
-            "Download Profile",
-            json.dumps(profile, indent=2),
-            f"{org.replace(' ','_')}_profile.json"
-        )
+        st.download_button("Download Profile", json.dumps(profile, indent=2),
+                           f"{org.replace(' ','_')}_profile.json")
     else:
         st.error("No match could be found.")
