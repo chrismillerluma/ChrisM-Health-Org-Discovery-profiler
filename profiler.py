@@ -7,6 +7,8 @@ from datetime import datetime
 import io
 import os
 import json
+import re
+import xml.etree.ElementTree as ET
 
 st.set_page_config(page_title="Healthcare Profiler (CMS + Reviews + News)", layout="wide")
 st.title("Healthcare Organization Discovery Profiler")
@@ -16,7 +18,9 @@ CMS_URL = (
     "893c372430d9d71a1c52737d01239d47_1753409109/Hospital_General_Information.csv"
 )
 
-# --- Load CMS Data ---
+# -------------------------
+# Load CMS Data
+# -------------------------
 @st.cache_data
 def load_cms():
     try:
@@ -34,114 +38,168 @@ def load_cms():
                 return df
             except Exception:
                 continue
-    st.error("Cannot load CMS data (web or local).")
+    st.error("Cannot load CMS data.")
     return pd.DataFrame()
 
-df_cms = load_cms()
+# -------------------------
+# Normalize Names
+# -------------------------
+def normalize_name(name):
+    name = name.lower()
+    name = re.sub(r'[^\w\s]', '', name)
+    for word in ['hospital', 'medical center', 'center', 'clinic']:
+        name = name.replace(word, '')
+    return name.strip()
 
-# --- Name Matching ---
-def match_org(name, df):
+# -------------------------
+# Google Pre-Validation
+# -------------------------
+def google_search_name(name, limit=3):
+    query = requests.utils.quote(name)
+    url = f"https://www.google.com/search?q={query}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        results = []
+        for g in soup.find_all('div', class_='tF2Cxc')[:limit]:
+            title = g.find('h3').get_text() if g.find('h3') else ''
+            link = g.find('a')['href'] if g.find('a') else ''
+            snippet = g.find('span', class_='aCOpRe').get_text() if g.find('span', class_='aCOpRe') else ''
+            results.append({"title": title, "link": link, "snippet": snippet})
+        return results
+    except Exception:
+        return []
+
+# -------------------------
+# Match Organization
+# -------------------------
+def match_org(name, df, state=None, city=None):
+    df_filtered = df.copy()
+    if state:
+        df_filtered = df_filtered[df_filtered['State'].str.upper() == state.upper()]
+    if city:
+        df_filtered = df_filtered[df_filtered['City'].str.upper() == city.upper()]
+    if df_filtered.empty:
+        return None, None, "No facilities found with specified state/city"
+
     name_cols = [c for c in df.columns if "name" in c.lower()]
-    if not name_cols:
-        return None, None, "No name column in CMS data"
     col = name_cols[0]
-    choices = df[col].dropna().tolist()
-    match = process.extractOne(name, choices, scorer=fuzz.WRatio, score_cutoff=60)
+    choices = df_filtered[col].dropna().tolist()
+    choices_norm = [normalize_name(c) for c in choices]
+    name_norm = normalize_name(name)
+
+    match = process.extractOne(name_norm, choices_norm, scorer=fuzz.WRatio, score_cutoff=90)
     if match:
         _, score, idx = match
-        return df.iloc[idx], col, f"Matched '{choices[idx]}' (score {score})"
-    subs = df[df[col].str.contains(name, case=False, na=False)]
+        return df_filtered.iloc[idx], col, f"Matched '{choices[idx]}' (score {score})"
+    
+    # Fallback
+    subs = df_filtered[df_filtered[col].str.contains(name, case=False, na=False)]
     if not subs.empty:
         return subs.iloc[0], col, f"Substring fallback: '{subs.iloc[0][col]}'"
     return None, col, "No match found"
 
-# --- Fetch Google Reviews ---
-def fetch_reviews(name, api_key=None):
-    reviews_summary = {
-        "average_rating": None,
-        "total_reviews": None,
-        "good_points": [],
-        "bad_points": [],
-        "top_reviews": []
-    }
+# -------------------------
+# Fetch News
+# -------------------------
+def fetch_news(name, limit=5):
+    url = f"https://news.google.com/rss/search?q={requests.utils.quote(name)}"
     try:
-        if api_key:
+        r = requests.get(url, timeout=10)
+        root = ET.fromstring(r.content)
+        items = root.findall(".//item")[:limit]
+        return [
+            {"title": i.find("title").text, "link": i.find("link").text, "date": i.find("pubDate").text}
+            for i in items
+        ]
+    except Exception:
+        return []
+
+# -------------------------
+# Fetch Reviews (simplified)
+# -------------------------
+def fetch_reviews(name, api_key=None):
+    # Try Google Places API first if key provided
+    reviews_data = []
+    if api_key:
+        try:
             url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={requests.utils.quote(name)}&key={api_key}"
             data = requests.get(url, timeout=10).json()
-            places = data.get("results", [])
-            for p in places[:5]:
-                place_id = p.get("place_id")
-                details_url = f"https://maps.googleapis.com/maps/api/place/details/json?place_id={place_id}&fields=rating,user_ratings_total,reviews&key={api_key}"
-                details = requests.get(details_url, timeout=10).json()
-                result = details.get("result", {})
-                reviews_summary["average_rating"] = result.get("rating")
-                reviews_summary["total_reviews"] = result.get("user_ratings_total")
-                reviews = result.get("reviews", [])
-                for review in reviews:
-                    text = review.get("text", "")
-                    rating = review.get("rating", 0)
-                    if rating >= 4:
-                        reviews_summary["good_points"].append(text)
-                    elif rating <= 2:
-                        reviews_summary["bad_points"].append(text)
-                    reviews_summary["top_reviews"].append({
-                        "author_name": review.get("author_name"),
-                        "rating": rating,
-                        "text": text
-                    })
-        else:
-            # Fallback scraping (simplified)
-            query = requests.utils.quote(name + " reviews")
-            r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
-            soup = BeautifulSoup(r.text, "html.parser")
-            spans = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:10]
-            for s in spans:
-                reviews_summary["top_reviews"].append({
-                    "author_name": "Anonymous",
-                    "rating": None,
-                    "text": s
+            for r in data.get("results", [])[:5]:
+                reviews_data.append({
+                    "name": r.get("name"),
+                    "rating": r.get("rating"),
+                    "user_ratings_total": r.get("user_ratings_total"),
+                    "address": r.get("formatted_address")
                 })
-    except Exception as e:
-        print("Reviews fetch error:", e)
-    return reviews_summary
+            return reviews_data
+        except Exception:
+            pass
+    # Fallback scraping Google search snippets
+    try:
+        query = requests.utils.quote(name + " reviews")
+        r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:5]
+        for s in snippets:
+            reviews_data.append({"snippet": s})
+        return reviews_data
+    except Exception:
+        return []
 
-# --- Streamlit UI ---
+# -------------------------
+# Main App
+# -------------------------
+df_cms = load_cms()
+
 org = st.text_input("Organization Name (e.g., UCSF Medical Center)")
-state = st.text_input("State (optional)")
-city = st.text_input("City (optional)")
 gkey = st.text_input("Google Places API Key (optional)", type="password")
 search_button = st.button("Search")
 
-# --- Only fetch when Search is pressed ---
 if org and search_button:
+    with st.spinner("Validating via Google search..."):
+        google_hits = google_search_name(org, limit=3)
+        st.subheader("Top Google Search Hits")
+        for hit in google_hits:
+            st.markdown(f"- [{hit['title']}]({hit['link']}) — {hit['snippet']}")
+
+        # Try extracting state/city from top hit snippets
+        city, state = None, None
+        for hit in google_hits:
+            snippet = hit['snippet']
+            match = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
+            if match:
+                city, state = match.group(1), match.group(2)
+                break
+
     with st.spinner("Matching organization..."):
-        match, name_col, msg = match_org(org, df_cms)
+        match, name_col, msg = match_org(org, df_cms, state=state, city=city)
         st.info(msg)
-    
+
     if match is not None:
         st.subheader("Facility Info")
         st.json(match.to_dict())
-        
-        with st.spinner("Fetching Google Reviews..."):
-            reviews = fetch_reviews(org, gkey)
-        st.subheader("Google Reviews Highlights")
-        st.write(f"**Average Rating:** {reviews['average_rating']}")
-        st.write(f"**Total Reviews:** {reviews['total_reviews']}")
-        st.markdown("**Good Points:**")
-        st.write(reviews["good_points"][:5])
-        st.markdown("**Bad Points:**")
-        st.write(reviews["bad_points"][:5])
-        st.markdown("**Top Reviews:**")
-        for review in reviews["top_reviews"][:5]:
-            st.write(f"**{review['author_name']}**: {review['rating']} stars")
-            st.write(f"  {review['text']}")
-        
+
+        with st.spinner("Fetching Google News..."):
+            news = fetch_news(match.get("Hospital Name") or match[name_col], limit=5)
+        st.subheader("Recent News")
+        for n in news:
+            st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
+
+        with st.spinner("Fetching Reviews..."):
+            revs = fetch_reviews(org, gkey)
+        st.subheader("Reviews Highlights / Top 5")
+        st.write(revs)
+
         profile = {
             "org_input": org,
-            "matched_name": match.get(name_col) or match.to_dict(),
-            "reviews": reviews,
+            "matched_name": match.get("Hospital Name") or match.to_dict(),
+            "news": news,
+            "reviews": revs,
             "timestamp": datetime.utcnow().isoformat()
         }
-        st.download_button("Download Profile", json.dumps(profile, indent=2), f"{org.replace(' ','_')}_profile.json")
+        st.download_button("Download Profile", json.dumps(profile, indent=2),
+                           f"{org.replace(' ','_')}_profile.json")
     else:
         st.error("No match could be found.")
