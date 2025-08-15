@@ -9,6 +9,8 @@ import os
 import json
 import re
 import xml.etree.ElementTree as ET
+import xlsxwriter
+import 
 
 st.set_page_config(page_title="Healthcare Profiler (CMS + Reviews + News + Business Profile)", layout="wide")
 st.title("Healthcare Organization Discovery Profiler")
@@ -285,40 +287,38 @@ if org and search_button:
                 st.warning(f"Could not calculate performance score: {e}")
 
 # -------------------------
-# Prepare Excel writer
+# Download Full Profile
 # -------------------------
-output = io.BytesIO()
-with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-    # 1️⃣ Facility Info
-    if match is not None:
-        pd.DataFrame([match.to_dict()]).to_excel(writer, sheet_name='Facility Info', index=False)
+st.subheader("Download Full Profile")
 
-    # 2️⃣ News
-    if news:
-        pd.DataFrame(news).to_excel(writer, sheet_name='News', index=False)
+# Combine all info
+profile_data = {
+    "organization_name": org,
+    "cms_info": match.to_dict() if match is not None else {},
+    "reviews": revs,
+    "news": news,
+    "about_info": about_data if place_info.get("website") else {}
+}
 
-    # 3️⃣ Reviews
-    if revs:
-        df_revs = pd.DataFrame(revs)
-        expected_cols = ["name", "author_name", "rating", "user_ratings_total", "address", "review_text", "time"]
-        for col in expected_cols:
-            if col not in df_revs.columns:
-                df_revs[col] = None
-        df_revs.to_excel(writer, sheet_name='Reviews', index=False)
-
-    # 4️⃣ Business Profile
-    if place_info:
-        bp = place_info.copy()
-        bp['about_page_info'] = about_info if 'about_info' in locals() else None
-        pd.DataFrame([bp]).to_excel(writer, sheet_name='Business Profile', index=False)
-
-    writer.save()
-    processed_data = output.getvalue()
-
-# Download button
+# JSON download
+json_bytes = json.dumps(profile_data, indent=2).encode('utf-8')
 st.download_button(
-    label="Download Full Profile (Excel)",
-    data=processed_data,
-    file_name=f"{org.replace(' ','_')}_profile.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    label="Download as JSON",
+    data=json_bytes,
+    file_name=f"{normalize_name(org)}_profile.json",
+    mime="application/json"
 )
+
+# CSV download (reviews only, as CSV is flat)
+if revs:
+    df_csv = pd.DataFrame(revs)
+    csv_bytes = df_csv.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download Reviews as CSV",
+        data=csv_bytes,
+        file_name=f"{normalize_name(org)}_reviews.csv",
+        mime="text/csv"
+    )
+else:
+    st.info("No reviews to download as CSV.")
+
