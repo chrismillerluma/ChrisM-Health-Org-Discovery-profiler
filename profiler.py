@@ -249,10 +249,10 @@ if org and search_button:
             st.dataframe(df_revs[expected_cols].head(25))
         else:
             st.info("No reviews found.")
-
+            
         st.subheader("Google Business Profile Info")
         if place_info:
-            st.json(
+            st.json({
                 "name": place_info.get("name"),
                 "address": place_info.get("formatted_address"),
                 "rating": place_info.get("rating"),
@@ -262,13 +262,18 @@ if org and search_button:
                 "website": place_info.get("website"),
                 "opening_hours": place_info.get("opening_hours"),
                 "geometry": place_info.get("geometry"),
-               
-            st.markdown(f"- **Total Reviews**: {total_reviews}")
+                "types": place_info.get("types"),
+                "place_id": place_info.get("place_id")
+            })
             else:
                     st.info("Insufficient data to calculate reputation score.")
             except Exception as e:
                 st.warning(f"Error calculating reputation score: {e}")
 
+# -------------------------
+# Reputation score    
+# -------------------------
+    
         st.subheader("Additional Notes")
         st.markdown("""
         - Reputation Score is calculated as: `Rating * min(Total Reviews / 100, 1) * 20`
