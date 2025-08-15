@@ -120,7 +120,7 @@ def fetch_news(name, limit=5):
 # Fetch Reviews (simplified)
 # -------------------------
 def fetch_reviews(name, api_key=None):
-    # Try Google Places API first if key provided
+	# Try Google Places API first if key provided
     reviews_data = []
     if api_key:
         try:
@@ -163,8 +163,8 @@ if org and search_button:
         st.subheader("Top Google Search Hits")
         for hit in google_hits:
             st.markdown(f"- [{hit['title']}]({hit['link']}) — {hit['snippet']}")
-
-        # Try extracting state/city from top hit snippets
+		
+		# Try extracting state/city from top hit snippets
         city, state = None, None
         for hit in google_hits:
             snippet = hit['snippet']
@@ -189,8 +189,17 @@ if org and search_button:
 
         with st.spinner("Fetching Reviews..."):
             revs = fetch_reviews(org, gkey)
-        st.subheader("Reviews Highlights / Top 5")
-        st.write(revs)
+
+        st.subheader("Reviews Table")
+        if revs:
+            df_revs = pd.DataFrame(revs)
+            expected_cols = ["name", "rating", "user_ratings_total", "address", "snippet"]
+            for col in expected_cols:
+                if col not in df_revs.columns:
+                    df_revs[col] = None
+            st.dataframe(df_revs[expected_cols])
+        else:
+            st.info("No reviews found.")
 
         profile = {
             "org_input": org,
