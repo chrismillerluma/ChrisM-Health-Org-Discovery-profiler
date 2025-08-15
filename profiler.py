@@ -285,46 +285,43 @@ if org and search_button:
                 st.warning(f"Could not calculate performance score: {e}")
 
 # -------------------------
-# Export Data
+# Download Profile as Excel
 # -------------------------
+import io
+
+# Prepare Excel writer
+output = io.BytesIO()
+with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    # 1️⃣ Facility Info
     if match is not None:
-        # Export CMS facility info
-        cms_df_export = pd.DataFrame([match.to_dict()])
-        csv_cms = cms_df_export.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Download Facility Info (CSV)",
-            data=csv_cms,
-            file_name=f"{normalize_name(org)}_facility.csv",
-            mime="text/csv"
-        )
+        pd.DataFrame([match.to_dict()]).to_excel(writer, sheet_name='Facility Info', index=False)
 
-    # Export Reviews
+    # 2️⃣ News
+    if news:
+        pd.DataFrame(news).to_excel(writer, sheet_name='News', index=False)
+
+    # 3️⃣ Reviews
     if revs:
-        df_revs_export = pd.DataFrame(revs)
-        csv_revs = df_revs_export.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Download Reviews (CSV)",
-            data=csv_revs,
-            file_name=f"{normalize_name(org)}_reviews.csv",
-            mime="text/csv"
-        )
+        df_revs = pd.DataFrame(revs)
+        expected_cols = ["name", "author_name", "rating", "user_ratings_total", "address", "review_text", "time"]
+        for col in expected_cols:
+            if col not in df_revs.columns:
+                df_revs[col] = None
+        df_revs.to_excel(writer, sheet_name='Reviews', index=False)
 
-    # Optionally export Google Business info
+    # 4️⃣ Business Profile
     if place_info:
-        place_json = json.dumps(place_info, indent=2)
-        st.download_button(
-            label="Download Google Business Profile (JSON)",
-            data=place_json,
-            file_name=f"{normalize_name(org)}_business_profile.json",
-            mime="application/json"
-        )
+        bp = place_info.copy()
+        bp['about_page_info'] = about_info if 'about_info' in locals() else None
+        pd.DataFrame([bp]).to_excel(writer, sheet_name='Business Profile', index=False)
 
-    # Export About / Website Scrape
-    if about_data:
-        about_json = json.dumps(about_data, indent=2)
-        st.download_button(
-            label="Download Website About Info (JSON)",
-            data=about_json,
-            file_name=f"{normalize_name(org)}_about.json",
-            mime="application/json"
-        )
+    writer.save()
+    processed_data = output.getvalue()
+
+# Download button
+st.download_button(
+    label="Download Full Profile (Excel)",
+    data=processed_data,
+    file_name=f"{org.replace(' ','_')}_profile.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
