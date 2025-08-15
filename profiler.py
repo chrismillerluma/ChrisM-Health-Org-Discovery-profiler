@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import xml.etree.ElementTree as ET
 from rapidfuzz import process, fuzz
 from datetime import datetime
-from textblob import TextBlob
+from textblob import textBlob
 import io
 import os
 import json
