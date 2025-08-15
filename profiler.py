@@ -262,6 +262,25 @@ if org and search_button:
             else:
                 st.info("Provide Google Places API key to fetch business profile info.")
 
+# -------------------------
+# Business Performance / Reputation Score
+# -------------------------
+with st.spinner("Calculating Business Performance / Reputation Score..."):
+    try:
+        if gkey:
+            # Simple example: score = average rating / total reviews normalized
+            rating = place.get("rating", 0)
+            total_reviews = place.get("user_ratings_total", 1)
+            rep_score = round(rating * min(total_reviews / 100, 1) * 20, 2)  # Scale 0-20
+            st.subheader("Business Performance / Reputation Score")
+            st.markdown(f"- **Score (0-20)**: {rep_score}")
+            st.markdown(f"- **Rating**: {rating} / 5")
+            st.markdown(f"- **Total Reviews**: {total_reviews}")
+        else:
+            st.info("Provide Google Places API key to calculate reputation score.")
+    except Exception as e:
+        st.warning(f"Could not calculate performance score: {e}")
+        
         # -------------------------
         # Download Profile
         # -------------------------
