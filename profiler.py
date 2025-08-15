@@ -217,9 +217,6 @@ if org and search_button:
         for n in news:
             st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
 
-        # -------------------------
-        # Reviews & Business Profile
-        # -------------------------
         with st.spinner("Fetching Reviews and Business Profile..."):
             revs, place_info = fetch_reviews(org, gkey, max_reviews=25)
 
@@ -252,9 +249,6 @@ if org and search_button:
                 "place_id": place_info.get("place_id")
             })
 
-        # -------------------------
-        # Reputation Score
-        # -------------------------
         with st.spinner("Calculating Business Performance / Reputation Score..."):
             try:
                 if place_info:
@@ -270,9 +264,6 @@ if org and search_button:
             except Exception as e:
                 st.warning(f"Could not calculate performance score: {e}")
 
-        # -------------------------
-        # Download Profile
-        # -------------------------
         profile = {
             "org_input": org,
             "matched_name": match.get("Hospital Name") or match.to_dict(),
