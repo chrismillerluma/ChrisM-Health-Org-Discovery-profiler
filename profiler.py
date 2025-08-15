@@ -9,8 +9,6 @@ import os
 import json
 import re
 import xml.etree.ElementTree as ET
-import xlsxwriter
-import 
 
 st.set_page_config(page_title="Healthcare Profiler (CMS + Reviews + News + Business Profile)", layout="wide")
 st.title("Healthcare Organization Discovery Profiler")
@@ -251,7 +249,7 @@ if org and search_button:
             st.dataframe(df_revs[expected_cols].head(25))
         else:
             st.info("No reviews found.")
-            
+
         st.subheader("Google Business Profile Info")
         if place_info:
             st.json({
@@ -264,61 +262,4 @@ if org and search_button:
                 "website": place_info.get("website"),
                 "opening_hours": place_info.get("opening_hours"),
                 "geometry": place_info.get("geometry"),
-                "types": place_info.get("types"),
-                "place_id": place_info.get("place_id")
-            })
-            
-# -------------------------
-# Reputation Score
-# -------------------------
-        with st.spinner("Calculating Business Performance / Reputation Score..."):
-            try:
-                if place_info:
-                    rating = place_info.get("rating", 0)
-                    total_reviews = place_info.get("user_ratings_total", 1)
-                    rep_score = round(rating * min(total_reviews / 100, 1) * 20, 2)
-                    st.subheader("Business Performance / Reputation Score")
-                    st.markdown(f"- **Score (0-20)**: {rep_score}")
-                    st.markdown(f"- **Rating**: {rating} / 5")
-                    st.markdown(f"- **Total Reviews**: {total_reviews}")
-                else:
-                    st.info("Google Places API key required to calculate reputation score.")
-            except Exception as e:
-                st.warning(f"Could not calculate performance score: {e}")
-
-# -------------------------
-# Download Full Profile
-# -------------------------
-st.subheader("Download Full Profile")
-
-# Combine all info
-profile_data = {
-    "organization_name": org,
-    "cms_info": match.to_dict() if match is not None else {},
-    "reviews": revs,
-    "news": news,
-    "about_info": about_data if place_info.get("website") else {}
-}
-
-# JSON download
-json_bytes = json.dumps(profile_data, indent=2).encode('utf-8')
-st.download_button(
-    label="Download as JSON",
-    data=json_bytes,
-    file_name=f"{normalize_name(org)}_profile.json",
-    mime="application/json"
-)
-
-# CSV download (reviews only, as CSV is flat)
-if revs:
-    df_csv = pd.DataFrame(revs)
-    csv_bytes = df_csv.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Download Reviews as CSV",
-        data=csv_bytes,
-        file_name=f"{normalize_name(org)}_reviews.csv",
-        mime="text/csv"
-    )
-else:
-    st.info("No reviews to download as CSV.")
-
+               
