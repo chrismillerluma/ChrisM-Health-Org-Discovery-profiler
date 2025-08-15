@@ -4,47 +4,36 @@ import requests
 from bs4 import BeautifulSoup
 from rapidfuzz import process, fuzz
 from datetime import datetime
-import io
-import os
 import json
 import re
-import xml.etree.ElementTree as ET
 
 st.set_page_config(page_title="Healthcare Profiler (CMS + Reviews + News)", layout="wide")
 st.title("Healthcare Organization Discovery Profiler")
 
-CMS_URL = (
-    "https://data.cms.gov/provider-data/sites/default/files/resources/"
-    "893c372430d9d71a1c52737d01239d47_1753409109/Hospital_General_Information.csv"
-)
+# -------------------------
+# CMS API Integration
+# -------------------------
+CMS_API_URL = "https://data.medicare.gov/resource/xubh-q36u.json"  # Hospital General Information JSON
 
-# -------------------------
-# Load CMS Data
-# -------------------------
 @st.cache_data
-def load_cms():
+def load_cms_api():
     try:
-        r = requests.get(CMS_URL, timeout=15)
-        df = pd.read_csv(io.BytesIO(r.content), dtype=str, on_bad_lines="skip")
-        st.success(f"Loaded CMS from web ({len(df)} records)")
+        r = requests.get(CMS_API_URL, timeout=15)
+        df = pd.DataFrame(r.json())
+        st.success(f"Loaded CMS API data ({len(df)} records)")
         return df
     except Exception as e:
-        st.warning(f"Failed loading CMS from URL: {e}")
-    if os.path.exists("cms_hospitals_backup.csv"):
-        for enc in ["utf-8", "latin1", "utf-16"]:
-            try:
-                df = pd.read_csv("cms_hospitals_backup.csv", dtype=str, encoding=enc, on_bad_lines="skip")
-                st.success(f"Loaded CMS from local backup ({enc})")
-                return df
-            except Exception:
-                continue
-    st.error("Cannot load CMS data.")
-    return pd.DataFrame()
+        st.error(f"Failed loading CMS API: {e}")
+        return pd.DataFrame()
+
+df_cms = load_cms_api()
 
 # -------------------------
 # Normalize Names
 # -------------------------
 def normalize_name(name):
+    if not name:
+        return ""
     name = name.lower()
     name = re.sub(r'[^\w\s]', '', name)
     for word in ['hospital', 'medical center', 'center', 'clinic']:
@@ -77,9 +66,9 @@ def google_search_name(name, limit=3):
 def match_org(name, df, state=None, city=None):
     df_filtered = df.copy()
     if state:
-        df_filtered = df_filtered[df_filtered['State'].str.upper() == state.upper()]
+        df_filtered = df_filtered[df_filtered['state'].str.upper() == state.upper()]
     if city:
-        df_filtered = df_filtered[df_filtered['City'].str.upper() == city.upper()]
+        df_filtered = df_filtered[df_filtered['city'].str.upper() == city.upper()]
     if df_filtered.empty:
         return None, None, "No facilities found with specified state/city"
 
@@ -93,8 +82,8 @@ def match_org(name, df, state=None, city=None):
     if match:
         _, score, idx = match
         return df_filtered.iloc[idx], col, f"Matched '{choices[idx]}' (score {score})"
-    
-    # Fallback
+
+    # fallback
     subs = df_filtered[df_filtered[col].str.contains(name, case=False, na=False)]
     if not subs.empty:
         return subs.iloc[0], col, f"Substring fallback: '{subs.iloc[0][col]}'"
@@ -117,10 +106,10 @@ def fetch_news(name, limit=5):
         return []
 
 # -------------------------
-# Fetch Reviews (simplified)
+# Fetch Reviews
 # -------------------------
 def fetch_reviews(name, api_key=None):
-    # Try Google Places API first if key provided
+    # Google Places API (optional)
     reviews_data = []
     if api_key:
         try:
@@ -136,12 +125,12 @@ def fetch_reviews(name, api_key=None):
             return reviews_data
         except Exception:
             pass
-    # Fallback scraping Google search snippets
+    # fallback: Google snippets
     try:
         query = requests.utils.quote(name + " reviews")
         r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-        snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:5]
+        snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:10]
         for s in snippets:
             reviews_data.append({"snippet": s})
         return reviews_data
@@ -151,8 +140,6 @@ def fetch_reviews(name, api_key=None):
 # -------------------------
 # Main App
 # -------------------------
-df_cms = load_cms()
-
 org = st.text_input("Organization Name (e.g., UCSF Medical Center)")
 gkey = st.text_input("Google Places API Key (optional)", type="password")
 search_button = st.button("Search")
@@ -164,7 +151,7 @@ if org and search_button:
         for hit in google_hits:
             st.markdown(f"- [{hit['title']}]({hit['link']}) — {hit['snippet']}")
 
-        # Try extracting state/city from top hit snippets
+        # extract city/state if possible
         city, state = None, None
         for hit in google_hits:
             snippet = hit['snippet']
@@ -173,30 +160,40 @@ if org and search_button:
                 city, state = match.group(1), match.group(2)
                 break
 
-    with st.spinner("Matching organization..."):
+    with st.spinner("Matching organization via CMS..."):
         match, name_col, msg = match_org(org, df_cms, state=state, city=city)
         st.info(msg)
 
     if match is not None:
-        st.subheader("Facility Info")
+        st.subheader("Facility Info & High-Level Stats")
         st.json(match.to_dict())
-
-        with st.spinner("Fetching Google News..."):
-            news = fetch_news(match.get("Hospital Name") or match[name_col], limit=5)
-        st.subheader("Recent News")
-        for n in news:
-            st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
 
         with st.spinner("Fetching Reviews..."):
             revs = fetch_reviews(org, gkey)
-        st.subheader("Reviews Highlights / Top 5")
-        st.write(revs)
+            if revs:
+                st.subheader("Reviews")
+                df_revs = pd.DataFrame(revs)
+                if 'rating' in df_revs.columns:
+                    df_sorted = df_revs.sort_values('rating', ascending=False)
+                    st.markdown("**Top 5 Reviews:**")
+                    st.dataframe(df_sorted.head(5))
+                    st.markdown("**Worst 5 Reviews:**")
+                    st.dataframe(df_sorted.tail(5))
+                else:
+                    st.dataframe(df_revs)
+
+        with st.spinner("Fetching Google News..."):
+            news = fetch_news(org, limit=5)
+            st.subheader("Recent News")
+            for n in news:
+                st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
 
         profile = {
             "org_input": org,
-            "matched_name": match.get("Hospital Name") or match.to_dict(),
-            "news": news,
+            "matched_name": match.get("hospital_name") or match.to_dict(),
+            "cms_data": match.to_dict(),
             "reviews": revs,
+            "news": news,
             "timestamp": datetime.utcnow().isoformat()
         }
         st.download_button("Download Profile", json.dumps(profile, indent=2),
