@@ -125,15 +125,13 @@ def fetch_reviews(name, api_key=None):
         try:
             url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={requests.utils.quote(name)}&key={api_key}"
             data = requests.get(url, timeout=10).json()
-            for r in data.get("results", [])[:10]:
+            for r in data.get("results", [])[:25]:
                 reviews_data.append({
                     "name": r.get("name"),
-                    "author_name": r.get("user_ratings_total", None),
                     "rating": r.get("rating"),
                     "user_ratings_total": r.get("user_ratings_total"),
                     "address": r.get("formatted_address"),
-                    "review_text": None,  # We can't get actual review text from this endpoint
-                    "time": None
+                    "snippet": r.get("reviews")[0]["text"] if r.get("reviews") else None
                 })
             return reviews_data
         except Exception:
@@ -145,18 +143,19 @@ def fetch_reviews(name, api_key=None):
         soup = BeautifulSoup(r.text, "html.parser")
         snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:25]
         for s in snippets:
-            reviews_data.append({
-                "name": name,
-                "author_name": None,
-                "rating": None,
-                "user_ratings_total": None,
-                "address": None,
-                "review_text": s,
-                "time": None
-            })
+            reviews_data.append({"snippet": s})
         return reviews_data
     except Exception:
         return []
+
+# -------------------------
+# Utility: Wrap text columns
+# -------------------------
+def wrap_text_columns(df, cols=None):
+    cols = cols or df.select_dtypes(include=['object']).columns
+    for col in cols:
+        df[col] = df[col].apply(lambda x: f"<div style='white-space: pre-wrap'>{x}</div>" if pd.notna(x) else x)
+    return df
 
 # -------------------------
 # Main App
@@ -178,9 +177,9 @@ if org and search_button:
         city, state = None, None
         for hit in google_hits:
             snippet = hit['snippet']
-            match_loc = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
-            if match_loc:
-                city, state = match_loc.group(1), match_loc.group(2)
+            match = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
+            if match:
+                city, state = match.group(1), match.group(2)
                 break
 
     with st.spinner("Matching organization..."):
@@ -203,29 +202,38 @@ if org and search_button:
         st.subheader("Top 25 Worst Reviews")
         if revs:
             df_revs = pd.DataFrame(revs)
-            expected_cols = ["name", "author_name", "rating", "user_ratings_total", "address", "review_text", "time"]
+            expected_cols = ["name", "rating", "user_ratings_total", "address", "snippet"]
             for col in expected_cols:
                 if col not in df_revs.columns:
                     df_revs[col] = None
 
-            df_worst25 = df_revs.sort_values("rating", ascending=True, na_position='last').head(25)
+            # Sort by rating ascending (worst first)
+            df_worst = df_revs.sort_values("rating", ascending=True).head(25)
+            df_worst = wrap_text_columns(df_worst, cols=["snippet", "name", "address"])
 
-            st.write(df_worst25[expected_cols].style.set_properties(**{
-                "white-space": "pre-wrap",
-                "word-break": "break-word",
-                "max-width": "400px"
-            }))
-            
-            profile = {
-                "org_input": org,
-                "matched_name": match.get("Hospital Name") or match.to_dict(),
-                "news": news,
-                "reviews": df_worst25.to_dict(orient="records"),
-                "timestamp": datetime.utcnow().isoformat()
-            }
-            st.download_button("Download Profile", json.dumps(profile, indent=2),
-                               f"{org.replace(' ','_')}_profile.json")
+            # Display scrollable table with wrapped text
+            st.markdown(
+                f"""
+                <div style="overflow-x:auto;">
+                    {df_worst[expected_cols].to_html(index=False, escape=False)}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
         else:
             st.info("No reviews found.")
+
+        profile = {
+            "org_input": org,
+            "matched_name": match.get("Hospital Name") or match.to_dict(),
+            "news": news,
+            "reviews": revs,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        st.download_button(
+            "Download Profile", 
+            json.dumps(profile, indent=2),
+            f"{org.replace(' ','_')}_profile.json"
+        )
     else:
         st.error("No match could be found.")
