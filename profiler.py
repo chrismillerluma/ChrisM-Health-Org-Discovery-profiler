@@ -116,65 +116,13 @@ def fetch_news(name, limit=5):
         return []
 
 # -------------------------
-# Fetch Reviews with real text
+# Fetch Reviews
 # -------------------------
 def fetch_reviews(name, api_key=None, max_reviews=25):
     reviews_data = []
-
-    if api_key:
-        try:
-            search_url = (
-                f"https://maps.googleapis.com/maps/api/place/textsearch/json?"
-                f"query={requests.utils.quote(name)}&key={api_key}"
-            )
-            search_resp = requests.get(search_url, timeout=10).json()
-            results = search_resp.get("results", [])
-            if results:
-                place_id = results[0].get("place_id")
-                if place_id:
-                    details_url = (
-                        f"https://maps.googleapis.com/maps/api/place/details/json?"
-                        f"place_id={place_id}&fields=name,reviews,formatted_address,rating,user_ratings_total"
-                        f"&key={api_key}"
-                    )
-                    details_resp = requests.get(details_url, timeout=10).json()
-                    place = details_resp.get("result", {})
-                    # Google returns max 5 reviews per request; we can batch 5 times if needed
-                    reviews = place.get("reviews", [])
-                    for r in reviews[:max_reviews]:
-                        reviews_data.append({
-                            "name": place.get("name"),
-                            "address": place.get("formatted_address"),
-                            "rating": r.get("rating"),
-                            "user_ratings_total": place.get("user_ratings_total"),
-                            "author_name": r.get("author_name"),
-                            "review_text": r.get("text"),
-                            "time": datetime.utcfromtimestamp(r.get("time")).isoformat() if r.get("time") else None
-                        })
-            return reviews_data
-        except Exception as e:
-            st.warning(f"Failed to fetch reviews from API: {e}")
-
-    # fallback scraping Google search snippets
-    try:
-        query = requests.utils.quote(name + " reviews")
-        r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:max_reviews]
-        for s in snippets:
-            reviews_data.append({"review_text": s})
-        return reviews_data
-    except Exception:
-        return []
-
-# -------------------------
-# Fetch Reviews with up to 25 entries (API + snippets)
-# -------------------------
-def fetch_reviews(name, api_key=None, max_reviews=25):
-    reviews_data = []
-
-    # 1️⃣ Try Google Places API (max 5 reviews)
     place = {}
+
+    # 1️⃣ Google Places API
     if api_key:
         try:
             search_url = (
@@ -189,8 +137,9 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
                 if place_id:
                     details_url = (
                         f"https://maps.googleapis.com/maps/api/place/details/json?"
-                        f"place_id={place_id}&fields=name,reviews,formatted_address,rating,user_ratings_total"
-                        f"&key={api_key}"
+                        f"place_id={place_id}&fields=name,reviews,formatted_address,rating,"
+                        f"user_ratings_total,formatted_phone_number,international_phone_number,"
+                        f"website,opening_hours,geometry,types,photos&key={api_key}"
                     )
                     details_resp = requests.get(details_url, timeout=10).json()
                     place = details_resp.get("result", {})
@@ -207,7 +156,7 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
         except Exception as e:
             st.warning(f"Failed to fetch reviews from API: {e}")
 
-    # 2️⃣ Supplement with Google search snippets to reach max_reviews
+    # 2️⃣ Google Search Snippets
     if len(reviews_data) < max_reviews:
         try:
             remaining = max_reviews - len(reviews_data)
@@ -228,7 +177,7 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
         except Exception:
             pass
 
-    return reviews_data[:max_reviews]
+    return reviews_data[:max_reviews], place
 
 # -------------------------
 # Main App
@@ -246,7 +195,6 @@ if org and search_button:
         for hit in google_hits:
             st.markdown(f"- [{hit['title']}]({hit['link']}) — {hit['snippet']}")
 
-        # Try extracting state/city from top hit snippets
         city, state = None, None
         for hit in google_hits:
             snippet = hit['snippet']
@@ -269,11 +217,8 @@ if org and search_button:
         for n in news:
             st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
 
-        # -------------------------
-        # Reviews Section
-        # -------------------------
-        with st.spinner("Fetching Reviews..."):
-            revs = fetch_reviews(org, gkey, max_reviews=25)
+        with st.spinner("Fetching Reviews and Business Profile..."):
+            revs, place_info = fetch_reviews(org, gkey, max_reviews=25)
 
         st.subheader("Reviews Table")
         if revs:
@@ -282,79 +227,52 @@ if org and search_button:
             for col in expected_cols:
                 if col not in df_revs.columns:
                     df_revs[col] = None
-
-            # Sort by lowest rating first if ratings exist
             if "rating" in df_revs.columns and df_revs["rating"].notna().any():
                 df_revs = df_revs.sort_values("rating", ascending=True)
-            
             st.dataframe(df_revs[expected_cols].head(25))
         else:
             st.info("No reviews found.")
 
-        # -------------------------
-        # Public Business Profile Section
-        # -------------------------
-        with st.spinner("Fetching Public Business Profile..."):
-            if gkey:
-                try:
-                    profile_url = (
-                        f"https://maps.googleapis.com/maps/api/place/textsearch/json?"
-                        f"query={requests.utils.quote(org)}&key={gkey}"
-                    )
-                    profile_resp = requests.get(profile_url, timeout=10).json()
-                    profile_results = profile_resp.get("results", [])
-                    if profile_results:
-                        place = profile_results[0]
-                        st.subheader("Google Business Profile Info")
-                        st.json({
-                            "name": place.get("name"),
-                            "address": place.get("formatted_address"),
-                            "rating": place.get("rating"),
-                            "user_ratings_total": place.get("user_ratings_total"),
-                            "types": place.get("types"),
-                            "place_id": place.get("place_id")
-                        })
+        st.subheader("Google Business Profile Info")
+        if place_info:
+            st.json({
+                "name": place_info.get("name"),
+                "address": place_info.get("formatted_address"),
+                "rating": place_info.get("rating"),
+                "user_ratings_total": place_info.get("user_ratings_total"),
+                "phone": place_info.get("formatted_phone_number"),
+                "international_phone": place_info.get("international_phone_number"),
+                "website": place_info.get("website"),
+                "opening_hours": place_info.get("opening_hours"),
+                "geometry": place_info.get("geometry"),
+                "types": place_info.get("types"),
+                "place_id": place_info.get("place_id")
+            })
 
-                        st.subheader("Top 25 Public Reviews")
-                        public_reviews = fetch_reviews(org, gkey, max_reviews=25)
-                        if public_reviews:
-                            df_public_reviews = pd.DataFrame(public_reviews)
-                            st.dataframe(df_public_reviews)
-                except Exception as e:
-                    st.warning(f"Could not fetch Google Business Profile info: {e}")
-            else:
-                st.info("Provide Google Places API key to fetch business profile info.")
+        with st.spinner("Calculating Business Performance / Reputation Score..."):
+            try:
+                if place_info:
+                    rating = place_info.get("rating", 0)
+                    total_reviews = place_info.get("user_ratings_total", 1)
+                    rep_score = round(rating * min(total_reviews / 100, 1) * 20, 2)
+                    st.subheader("Business Performance / Reputation Score")
+                    st.markdown(f"- **Score (0-20)**: {rep_score}")
+                    st.markdown(f"- **Rating**: {rating} / 5")
+                    st.markdown(f"- **Total Reviews**: {total_reviews}")
+                else:
+                    st.info("Google Places API key required to calculate reputation score.")
+            except Exception as e:
+                st.warning(f"Could not calculate performance score: {e}")
 
-        # -------------------------
-        # Download Profile
-        # -------------------------
         profile = {
             "org_input": org,
             "matched_name": match.get("Hospital Name") or match.to_dict(),
             "news": news,
             "reviews": revs,
+            "business_profile": place_info,
             "timestamp": datetime.utcnow().isoformat()
         }
         st.download_button("Download Profile", json.dumps(profile, indent=2),
                            f"{org.replace(' ','_')}_profile.json")
     else:
         st.error("No match could be found.")
-
-# -------------------------
-# Business Performance / Reputation Score
-# -------------------------
-with st.spinner("Calculating Business Performance / Reputation Score..."):
-    try:
-        if gkey:
-            # Simple example: score = average rating / total reviews normalized
-            rating = place.get("rating", 0)
-            total_reviews = place.get("user_ratings_total", 1)
-            rep_score = round(rating * min(total_reviews / 100, 1) * 20, 2)  # Scale 0-20
-            st.subheader("Business Performance / Reputation Score")
-            st.markdown(f"- **Score (0-20)**: {rep_score}")
-            st.markdown(f"- **Rating**: {rating} / 5")
-            st.markdown(f"- **Total Reviews**: {total_reviews}")
-        else:
-            st.info("Provide Google Places API key to calculate reputation score.")
-    except Exception as e:
-        st.warning(f"Could not calculate performance score: {e}")
