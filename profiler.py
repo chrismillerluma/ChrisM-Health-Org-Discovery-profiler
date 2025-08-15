@@ -5,7 +5,6 @@ from bs4 import BeautifulSoup
 import xml.etree.ElementTree as ET
 from rapidfuzz import process, fuzz
 from datetime import datetime
-import time
 import io
 import os
 import json
@@ -20,7 +19,6 @@ CMS_URL = (
 
 @st.cache_data
 def load_cms():
-    # Try to load CMS from URL
     try:
         r = requests.get(CMS_URL, timeout=15)
         df = pd.read_csv(io.BytesIO(r.content), dtype=str, on_bad_lines="skip")
@@ -28,7 +26,6 @@ def load_cms():
         return df
     except Exception as e:
         st.warning(f"Failed loading CMS from URL: {e}")
-    # Try local backup
     if os.path.exists("cms_hospitals_backup.csv"):
         for enc in ["utf-8", "latin1", "utf-16"]:
             try:
@@ -43,19 +40,18 @@ def load_cms():
 def match_org(name, df):
     common_cols = [c for c in df.columns if "name" in c.lower()]
     if not common_cols:
-        return None, "No name column in CMS data"
+        return None, None, "No name column in CMS data"
     col = common_cols[0]
     choices = df[col].dropna().tolist()
     match = process.extractOne(name, choices, scorer=fuzz.WRatio, score_cutoff=60)
     if match:
         _, score, idx = match
-        return df.iloc[idx], f"Matched '{choices[idx]}' (score {score})"
+        return df.iloc[idx], col, f"Matched '{choices[idx]}' (score {score})"
     else:
-        # substring search
         subs = df[df[col].str.contains(name, case=False, na=False)]
         if not subs.empty:
-            return subs.iloc[0], f"Substring fallback: '{subs.iloc[0][col]}'"
-    return None, "No match found"
+            return subs.iloc[0], col, f"Substring fallback: '{subs.iloc[0][col]}'"
+    return None, col, "No match found"
 
 def fetch_news(name, limit=5):
     url = f"https://news.google.com/rss/search?q={requests.utils.quote(name)}"
@@ -74,7 +70,6 @@ def fetch_reviews(name, api_key=None):
     reviews = []
     if api_key:
         try:
-            # Search for place_id first
             search_url = (
                 "https://maps.googleapis.com/maps/api/place/textsearch/json"
                 f"?query={requests.utils.quote(name)}&key={api_key}"
@@ -89,7 +84,6 @@ def fetch_reviews(name, api_key=None):
                 )
                 details_data = requests.get(details_url, timeout=10).json()
                 place_reviews = details_data.get("result", {}).get("reviews", [])
-                # Keep top 3 good and top 3 bad reviews
                 if place_reviews:
                     sorted_reviews = sorted(place_reviews, key=lambda x: x.get("rating", 0), reverse=True)
                     top_good = sorted_reviews[:3]
@@ -99,7 +93,7 @@ def fetch_reviews(name, api_key=None):
         except Exception as e:
             st.warning(f"Google Places API failed: {e}")
 
-    # Fallback scraping (less reliable, just text snippets)
+    # Fallback scraping
     try:
         query = requests.utils.quote(name + " reviews")
         r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
@@ -118,20 +112,20 @@ gkey = st.text_input("Google Places API Key (optional)", type="password")
 
 if org:
     with st.spinner("Matching organization..."):
-        match, msg = match_org(org, df_cms)
+        match, name_col, msg = match_org(org, df_cms)
         st.info(msg)
     if match is not None:
         st.subheader("Facility Info")
         st.json(match.to_dict())
 
         with st.spinner("Fetching Google News..."):
-            news = fetch_news(match.get("Hospital Name") or match.get(match.index[0]), limit=5)
+            news = fetch_news(match.get(name_col), limit=5)
         st.subheader("Recent News")
         for n in news:
             st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
 
         with st.spinner("Fetching Reviews..."):
-            revs = fetch_reviews(org, gkey)
+            revs = fetch_reviews(match.get(name_col), gkey)
         st.subheader("Top Reviews")
         st.markdown("**Positive:**")
         for r in revs.get("good", []):
@@ -145,7 +139,7 @@ if org:
 
         profile = {
             "org_input": org,
-            "matched_name": match.get("Hospital Name") or match.to_dict(),
+            "matched_name": match.get(name_col) or match.to_dict(),
             "news": news,
             "reviews": revs,
             "timestamp": datetime.utcnow().isoformat()
