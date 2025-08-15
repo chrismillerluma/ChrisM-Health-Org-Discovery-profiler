@@ -37,20 +37,34 @@ def load_cms():
     st.error("Cannot load CMS data (web or local). App cannot function.")
     return pd.DataFrame()
 
-def match_org(name, df):
+def match_org(name, df, state=None, city=None):
+    # Find the name column
     common_cols = [c for c in df.columns if "name" in c.lower()]
     if not common_cols:
         return None, None, "No name column in CMS data"
     col = common_cols[0]
-    choices = df[col].dropna().tolist()
-    match = process.extractOne(name, choices, scorer=fuzz.WRatio, score_cutoff=60)
+
+    # Filter by state/city if provided
+    df_filtered = df.copy()
+    if state:
+        df_filtered = df_filtered[df_filtered['State'].str.upper() == state.upper()]
+    if city:
+        df_filtered = df_filtered[df_filtered['City/Town'].str.upper() == city.upper()]
+    if df_filtered.empty:
+        return None, col, "No facilities found with specified state/city"
+
+    # Fuzzy match
+    choices = df_filtered[col].dropna().tolist()
+    match = process.extractOne(name, choices, scorer=fuzz.WRatio, score_cutoff=85)
     if match:
         _, score, idx = match
-        return df.iloc[idx], col, f"Matched '{choices[idx]}' (score {score})"
-    else:
-        subs = df[df[col].str.contains(name, case=False, na=False)]
-        if not subs.empty:
-            return subs.iloc[0], col, f"Substring fallback: '{subs.iloc[0][col]}'"
+        return df_filtered.iloc[idx], col, f"Matched '{choices[idx]}' (score {score})"
+    
+    # Substring fallback
+    subs = df_filtered[df_filtered[col].str.contains(name, case=False, na=False)]
+    if not subs.empty:
+        return subs.iloc[0], col, f"Substring fallback: '{subs.iloc[0][col]}'"
+
     return None, col, "No match found"
 
 def fetch_news(name, limit=5):
@@ -106,14 +120,20 @@ def fetch_reviews(name, api_key=None):
 
     return reviews
 
+# Load CMS data
 df_cms = load_cms()
+
+# Streamlit inputs
 org = st.text_input("Organization Name (e.g., UCSF Medical Center)")
+state = st.text_input("State (optional, e.g., CA)").strip()
+city = st.text_input("City (optional, e.g., San Francisco)").strip()
 gkey = st.text_input("Google Places API Key (optional)", type="password")
 
 if org:
     with st.spinner("Matching organization..."):
-        match, name_col, msg = match_org(org, df_cms)
+        match, name_col, msg = match_org(org, df_cms, state=state or None, city=city or None)
         st.info(msg)
+    
     if match is not None:
         st.subheader("Facility Info")
         st.json(match.to_dict())
