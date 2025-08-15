@@ -9,7 +9,7 @@ import io
 import os
 import json
 
-st.set_page_config(page_title="Healthcare Profiler (CMS + Reviews + News)", layout="wide")
+st.set_page_config(page_title="Healthcare Profiler (CMS + Reviews + News + U.S. News)", layout="wide")
 st.title("Healthcare Organization Discovery Profiler")
 
 CMS_URL = (
@@ -38,13 +38,10 @@ def load_cms():
     return pd.DataFrame()
 
 def match_org(name, df, state=None, city=None):
-    # Find the name column
     common_cols = [c for c in df.columns if "name" in c.lower()]
     if not common_cols:
         return None, None, "No name column in CMS data"
     col = common_cols[0]
-
-    # Filter by state/city if provided
     df_filtered = df.copy()
     if state:
         df_filtered = df_filtered[df_filtered['State'].str.upper() == state.upper()]
@@ -52,19 +49,14 @@ def match_org(name, df, state=None, city=None):
         df_filtered = df_filtered[df_filtered['City/Town'].str.upper() == city.upper()]
     if df_filtered.empty:
         return None, col, "No facilities found with specified state/city"
-
-    # Fuzzy match
     choices = df_filtered[col].dropna().tolist()
     match = process.extractOne(name, choices, scorer=fuzz.WRatio, score_cutoff=85)
     if match:
         _, score, idx = match
         return df_filtered.iloc[idx], col, f"Matched '{choices[idx]}' (score {score})"
-    
-    # Substring fallback
     subs = df_filtered[df_filtered[col].str.contains(name, case=False, na=False)]
     if not subs.empty:
         return subs.iloc[0], col, f"Substring fallback: '{subs.iloc[0][col]}'"
-
     return None, col, "No match found"
 
 def fetch_news(name, limit=5):
@@ -106,8 +98,6 @@ def fetch_reviews(name, api_key=None):
                     return reviews
         except Exception as e:
             st.warning(f"Google Places API failed: {e}")
-
-    # Fallback scraping
     try:
         query = requests.utils.quote(name + " reviews")
         r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
@@ -117,13 +107,25 @@ def fetch_reviews(name, api_key=None):
         reviews = {"good": snippets[:mid], "bad": snippets[mid:]}
     except Exception as e:
         st.warning(f"Fallback review scraping failed: {e}")
-
     return reviews
 
-# Load CMS data
+def fetch_usnews_highlights(name):
+    url = f"https://health.usnews.com/best-hospitals/area/ca/{requests.utils.quote(name)}"
+    try:
+        r = requests.get(url, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        highlights = []
+        for section in soup.find_all("section", class_="css-1h7qf4s"):
+            title = section.find("h3")
+            if title:
+                highlights.append(title.get_text(strip=True))
+        return highlights
+    except Exception as e:
+        st.warning(f"U.S. News highlights fetch failed: {e}")
+    return []
+
 df_cms = load_cms()
 
-# Streamlit inputs
 org = st.text_input("Organization Name (e.g., UCSF Medical Center)")
 state = st.text_input("State (optional, e.g., CA)").strip()
 city = st.text_input("City (optional, e.g., San Francisco)").strip()
@@ -157,11 +159,21 @@ if org:
             st.write(f"- {r.get('text', r) if isinstance(r, dict) else r} "
                      f"(Rating: {r.get('rating','N/A') if isinstance(r, dict) else 'N/A'})")
 
+        with st.spinner("Fetching U.S. News Highlights..."):
+            usnews_highlights = fetch_usnews_highlights(match.get(name_col))
+        st.subheader("U.S. News Highlights")
+        if usnews_highlights:
+            for highlight in usnews_highlights:
+                st.write(f"- {highlight}")
+        else:
+            st.write("No highlights found.")
+
         profile = {
             "org_input": org,
             "matched_name": match.get(name_col) or match.to_dict(),
             "news": news,
             "reviews": revs,
+            "usnews_highlights": usnews_highlights,
             "timestamp": datetime.utcnow().isoformat()
         }
         st.download_button(
