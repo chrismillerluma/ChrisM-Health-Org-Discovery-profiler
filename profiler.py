@@ -257,7 +257,3 @@ if org and search_button:
         - Data sources include CMS, Google News, Google Reviews, and the facility website.
         - Scores are capped at 20 for easy comparison between organizations.
         """)
-        
-        else:
-        st.warning("No matching facility found in CMS database. Try adjusting the organization name or checking the Google search results.")
-
