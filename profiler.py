@@ -285,11 +285,8 @@ if org and search_button:
                 st.warning(f"Could not calculate performance score: {e}")
 
 # -------------------------
-# Download Profile as Excel
-# -------------------------
-import io
-
 # Prepare Excel writer
+# -------------------------
 output = io.BytesIO()
 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
     # 1️⃣ Facility Info
