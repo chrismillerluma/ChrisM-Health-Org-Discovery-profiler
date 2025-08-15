@@ -265,24 +265,24 @@ if org and search_button:
                 "types": place_info.get("types"),
                 "place_id": place_info.get("place_id")
             })
-            else:
-                    st.info("Insufficient data to calculate reputation score.")
+            
+# -------------------------
+# Reputation Score
+# -------------------------
+        with st.spinner("Calculating Business Performance / Reputation Score..."):
+            try:
+                if place_info:
+                    rating = place_info.get("rating", 0)
+                    total_reviews = place_info.get("user_ratings_total", 1)
+                    rep_score = round(rating * min(total_reviews / 100, 1) * 20, 2)
+                    st.subheader("Business Performance / Reputation Score")
+                    st.markdown(f"- **Score (0-20)**: {rep_score}")
+                    st.markdown(f"- **Rating**: {rating} / 5")
+                    st.markdown(f"- **Total Reviews**: {total_reviews}")
+                else:
+                    st.info("Google Places API key required to calculate reputation score.")
             except Exception as e:
-                st.warning(f"Error calculating reputation score: {e}")
-
-# -------------------------
-# Reputation score    
-# -------------------------
-    
-        st.subheader("Additional Notes")
-        st.markdown("""
-        - Reputation Score is calculated as: `Rating * min(Total Reviews / 100, 1) * 20`
-        - Data sources include CMS, Google News, Google Reviews, and the facility website.
-        - Scores are capped at 20 for easy comparison between organizations.
-        """)
-
-            else:
-                st.warning("No matching facility found in CMS database. Try adjusting the organization name or checking the Google search results.")
+                st.warning(f"Could not calculate performance score: {e}")
 
 # -------------------------
 # Export Data
