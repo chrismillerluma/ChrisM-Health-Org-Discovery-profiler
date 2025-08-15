@@ -263,8 +263,8 @@ if org and search_button:
                 "opening_hours": place_info.get("opening_hours"),
                 "geometry": place_info.get("geometry"),
                
-                    st.markdown(f"- **Total Reviews**: {total_reviews}")
-                else:
+            st.markdown(f"- **Total Reviews**: {total_reviews}")
+            else:
                     st.info("Insufficient data to calculate reputation score.")
             except Exception as e:
                 st.warning(f"Error calculating reputation score: {e}")
@@ -276,8 +276,8 @@ if org and search_button:
         - Scores are capped at 20 for easy comparison between organizations.
         """)
 
-    else:
-        st.warning("No matching facility found in CMS database. Try adjusting the organization name or checking the Google search results.")
+            else:
+                st.warning("No matching facility found in CMS database. Try adjusting the organization name or checking the Google search results.")
 
 # -------------------------
 # Export Data
