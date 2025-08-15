@@ -116,7 +116,7 @@ def fetch_news(name, limit=5):
         return []
 
 # -------------------------
-# Fetch Reviews
+# Fetch Reviews & Google Business Info
 # -------------------------
 def fetch_reviews(name, api_key=None, max_reviews=25):
     reviews_data = []
@@ -139,7 +139,7 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
                         f"https://maps.googleapis.com/maps/api/place/details/json?"
                         f"place_id={place_id}&fields=name,reviews,formatted_address,rating,"
                         f"user_ratings_total,formatted_phone_number,international_phone_number,"
-                        f"website,opening_hours,geometry,types,photos&key={api_key}"
+                        f"website,opening_hours,geometry,types,place_id&key={api_key}"
                     )
                     details_resp = requests.get(details_url, timeout=10).json()
                     place = details_resp.get("result", {})
@@ -156,23 +156,14 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
         except Exception as e:
             st.warning(f"Failed to fetch reviews from API: {e}")
 
-    # 2️⃣ Google Search Snippets fallback (improved)
+    # 2️⃣ Google Search Snippets (fill in if API didn't reach max_reviews)
     if len(reviews_data) < max_reviews:
         try:
             remaining = max_reviews - len(reviews_data)
             query = requests.utils.quote(name + " reviews")
             r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
             soup = BeautifulSoup(r.text, "html.parser")
-            
-            review_spans = soup.find_all("span")
-            snippets = []
-            for span in review_spans:
-                text = span.get_text()
-                if len(text) > 30 and "review" in text.lower():
-                    snippets.append(text)
-                if len(snippets) >= remaining:
-                    break
-            
+            snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:remaining]
             for s in snippets:
                 reviews_data.append({
                     "name": place.get("name") if place else None,
@@ -189,34 +180,23 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
     return reviews_data[:max_reviews], place
 
 # -------------------------
-# Fetch About Info from Website
+# Scrape Website for About Info
 # -------------------------
-def fetch_about_info(website):
-    about_info = {}
+def scrape_about(website_url):
+    if not website_url:
+        return {}
     try:
-        if website:
-            if not website.startswith("http"):
-                website = "https://" + website
-            r = requests.get(website, timeout=10, headers={"User-Agent":"Mozilla/5.0"})
-            soup = BeautifulSoup(r.text, "html.parser")
-            
-            # Meta description
-            meta_desc = soup.find("meta", attrs={"name": "description"})
-            about_info["meta_description"] = meta_desc["content"] if meta_desc else None
-            
-            # First 5 paragraphs
-            paragraphs = soup.find_all("p")
-            about_info["main_text"] = " ".join([p.get_text().strip() for p in paragraphs[:5]])
-            
-            # Try /about page
-            about_page = requests.get(website.rstrip("/") + "/about", timeout=10, headers={"User-Agent":"Mozilla/5.0"})
-            soup_about = BeautifulSoup(about_page.text, "html.parser")
-            paragraphs_about = soup_about.find_all("p")
-            if paragraphs_about:
-                about_info["about_page_text"] = " ".join([p.get_text().strip() for p in paragraphs_about[:5]])
-    except Exception as e:
-        about_info["error"] = str(e)
-    return about_info
+        r = requests.get(website_url, headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        title = soup.title.string.strip() if soup.title else ""
+        meta_desc = ""
+        desc_tag = soup.find("meta", attrs={"name":"description"}) or soup.find("meta", attrs={"property":"og:description"})
+        if desc_tag and desc_tag.get("content"):
+            meta_desc = desc_tag["content"].strip()
+        h1_text = soup.find("h1").get_text().strip() if soup.find("h1") else ""
+        return {"title": title, "meta_description": meta_desc, "h1": h1_text, "url": website_url}
+    except Exception:
+        return {}
 
 # -------------------------
 # Main App
@@ -270,17 +250,74 @@ if org and search_button:
                 if col not in df_revs.columns:
                     df_revs[col] = None
             if "rating" in df_revs.columns and df_revs["rating"].notna().any():
-                df_revs = df_revs.sort_values(by="rating", ascending=False)
-            st.dataframe(df_revs[expected_cols])
+                df_revs = df_revs.sort_values("rating", ascending=True)
+            st.dataframe(df_revs[expected_cols].head(25))
         else:
             st.info("No reviews found.")
 
+        st.subheader("Google Business Profile Info")
+        if place_info:
+            st.json({
+                "name": place_info.get("name"),
+                "address": place_info.get("formatted_address"),
+                "rating": place_info.get("rating"),
+                "user_ratings_total": place_info.get("user_ratings_total"),
+                "phone": place_info.get("formatted_phone_number"),
+                "international_phone": place_info.get("international_phone_number"),
+                "website": place_info.get("website"),
+                "opening_hours": place_info.get("opening_hours"),
+                "geometry": place_info.get("geometry"),
+                "types": place_info.get("types"),
+                "place_id": place_info.get("place_id")
+            })
+
         # -------------------------
-        # About Section
+        # Scrape About Info
         # -------------------------
-        st.subheader("Organization About Info")
-        if place_info.get("website"):
-            about_data = fetch_about_info(place_info["website"])
+        about_data = scrape_about(place_info.get("website") if place_info else None)
+        if about_data:
+            st.subheader("About Information (Scraped from Website)")
             st.json(about_data)
-        else:
-            st.info("No website available to fetch About information.")
+
+        # -------------------------
+        # Reputation Score
+        # -------------------------
+        with st.spinner("Calculating Business Performance / Reputation Score..."):
+            try:
+                if place_info:
+                    rating = place_info.get("rating", 0)
+                    total_reviews = place_info.get("user_ratings_total", 1)
+                    rep_score = round(rating * min(total_reviews / 100, 1) * 20, 2)
+                    st.subheader("Business Performance / Reputation Score")
+                    st.markdown(f"- **Score (0-20)**: {rep_score}")
+                    st.markdown(f"- **Rating**: {rating} / 5")
+                    st.markdown(f"- **Total Reviews**: {total_reviews}")
+                else:
+                    st.info("Google Places API key required to calculate reputation score.")
+            except Exception as e:
+                st.warning(f"Could not calculate performance score: {e}")
+
+        # -------------------------
+        # Download Full Profile
+        # -------------------------
+        profile_data = {
+            "org_input": org,
+            "matched_name": match.get("Hospital Name") or match.to_dict(),
+            "news": news,
+            "reviews": revs,
+            "business_profile": place_info,
+            "about_info": about_data,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+        st.subheader("Download Full Profile")
+        # JSON
+        json_bytes = json.dumps(profile_data, indent=2).encode('utf-8')
+        st.download_button(
+            label="Download Full Profile as JSON",
+            data=json_bytes,
+            file_name=f"{normalize_name(org)}_profile.json",
+            mime="application/json"
+        )
+        # CSV (reviews only)
+        if
