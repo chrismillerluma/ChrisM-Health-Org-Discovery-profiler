@@ -94,7 +94,6 @@ def match_org(name, df, state=None, city=None):
         _, score, idx = match
         return df_filtered.iloc[idx], col, f"Matched '{choices[idx]}' (score {score})"
     
-    # Fallback
     subs = df_filtered[df_filtered[col].str.contains(name, case=False, na=False)]
     if not subs.empty:
         return subs.iloc[0], col, f"Substring fallback: '{subs.iloc[0][col]}'"
@@ -117,39 +116,51 @@ def fetch_news(name, limit=5):
         return []
 
 # -------------------------
-# Fetch Reviews (Google Places API if key, fallback scraping)
+# Fetch Reviews with real text
 # -------------------------
-def fetch_reviews(name, api_key=None):
+def fetch_reviews(name, api_key=None, max_reviews=25):
     reviews_data = []
+
     if api_key:
         try:
-            # Search place by name
-            url = f"https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input={requests.utils.quote(name)}&inputtype=textquery&fields=place_id&key={api_key}"
-            data = requests.get(url, timeout=10).json()
-            place_id = data.get("candidates", [{}])[0].get("place_id")
-            if place_id:
-                url2 = f"https://maps.googleapis.com/maps/api/place/details/json?place_id={place_id}&fields=name,rating,reviews,formatted_address&key={api_key}"
-                detail = requests.get(url2, timeout=10).json()
-                for r in detail.get("result", {}).get("reviews", []):
-                    reviews_data.append({
-                        "name": detail.get("result", {}).get("name"),
-                        "rating": r.get("rating"),
-                        "user_ratings_total": None,
-                        "address": detail.get("result", {}).get("formatted_address"),
-                        "snippet": r.get("text")
-                    })
-                return reviews_data
-        except Exception:
-            pass
+            search_url = (
+                f"https://maps.googleapis.com/maps/api/place/textsearch/json?"
+                f"query={requests.utils.quote(name)}&key={api_key}"
+            )
+            search_resp = requests.get(search_url, timeout=10).json()
+            results = search_resp.get("results", [])
+            if results:
+                place_id = results[0].get("place_id")
+                if place_id:
+                    details_url = (
+                        f"https://maps.googleapis.com/maps/api/place/details/json?"
+                        f"place_id={place_id}&fields=name,reviews,formatted_address,rating,user_ratings_total"
+                        f"&key={api_key}"
+                    )
+                    details_resp = requests.get(details_url, timeout=10).json()
+                    place = details_resp.get("result", {})
+                    for r in place.get("reviews", [])[:max_reviews]:
+                        reviews_data.append({
+                            "name": place.get("name"),
+                            "address": place.get("formatted_address"),
+                            "rating": r.get("rating"),
+                            "user_ratings_total": place.get("user_ratings_total"),
+                            "author_name": r.get("author_name"),
+                            "review_text": r.get("text"),
+                            "time": datetime.utcfromtimestamp(r.get("time")).isoformat() if r.get("time") else None
+                        })
+            return reviews_data
+        except Exception as e:
+            st.warning(f"Failed to fetch reviews from API: {e}")
 
     # Fallback scraping Google search snippets
     try:
         query = requests.utils.quote(name + " reviews")
         r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-        snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:25]
+        snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:max_reviews]
         for s in snippets:
-            reviews_data.append({"snippet": s, "name": name, "rating": None, "user_ratings_total": None, "address": None})
+            reviews_data.append({"review_text": s})
         return reviews_data
     except Exception:
         return []
@@ -174,9 +185,9 @@ if org and search_button:
         city, state = None, None
         for hit in google_hits:
             snippet = hit['snippet']
-            match_snip = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
-            if match_snip:
-                city, state = match_snip.group(1), match_snip.group(2)
+            match_loc = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
+            if match_loc:
+                city, state = match_loc.group(1), match_loc.group(2)
                 break
 
     with st.spinner("Matching organization..."):
@@ -194,29 +205,21 @@ if org and search_button:
             st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
 
         with st.spinner("Fetching Reviews..."):
-            revs = fetch_reviews(org, gkey)
+            revs = fetch_reviews(org, gkey, max_reviews=25)
 
+        st.subheader("Reviews Table")
         if revs:
             df_revs = pd.DataFrame(revs)
-            expected_cols = ["name", "rating", "user_ratings_total", "address", "snippet"]
+            expected_cols = ["name", "author_name", "rating", "user_ratings_total", "address", "review_text", "time"]
             for col in expected_cols:
                 if col not in df_revs.columns:
                     df_revs[col] = None
 
-            # Keep only worst 25 by rating if available, else last 25
+            # Sort by lowest rating first if ratings exist
             if "rating" in df_revs.columns and df_revs["rating"].notna().any():
-                df_display = df_revs.sort_values("rating").head(25)
-            else:
-                df_display = df_revs.tail(25)
-
-            # Wrap text columns for clean display
-            df_display = df_display.fillna("")
-            for col in ["snippet", "address", "name"]:
-                df_display[col] = df_display[col].apply(lambda x: "\n".join([x[i:i+80] for i in range(0, len(x), 80)]))
-
-            st.subheader("Worst 25 Reviews")
-            st.dataframe(df_display[expected_cols], use_container_width=True)
-
+                df_revs = df_revs.sort_values("rating", ascending=True)
+            
+            st.dataframe(df_revs[expected_cols].head(25))
         else:
             st.info("No reviews found.")
 
