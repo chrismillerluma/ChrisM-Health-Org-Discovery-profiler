@@ -252,7 +252,7 @@ if org and search_button:
 
         st.subheader("Google Business Profile Info")
         if place_info:
-            st.json({
+            st.json(
                 "name": place_info.get("name"),
                 "address": place_info.get("formatted_address"),
                 "rating": place_info.get("rating"),
