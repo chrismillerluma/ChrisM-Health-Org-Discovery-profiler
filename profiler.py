@@ -117,25 +117,31 @@ def fetch_news(name, limit=5):
         return []
 
 # -------------------------
-# Fetch Reviews (simplified)
+# Fetch Reviews (Google Places API if key, fallback scraping)
 # -------------------------
 def fetch_reviews(name, api_key=None):
     reviews_data = []
     if api_key:
         try:
-            url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={requests.utils.quote(name)}&key={api_key}"
+            # Search place by name
+            url = f"https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input={requests.utils.quote(name)}&inputtype=textquery&fields=place_id&key={api_key}"
             data = requests.get(url, timeout=10).json()
-            for r in data.get("results", [])[:25]:
-                reviews_data.append({
-                    "name": r.get("name"),
-                    "rating": r.get("rating"),
-                    "user_ratings_total": r.get("user_ratings_total"),
-                    "address": r.get("formatted_address"),
-                    "snippet": r.get("reviews")[0]["text"] if r.get("reviews") else None
-                })
-            return reviews_data
+            place_id = data.get("candidates", [{}])[0].get("place_id")
+            if place_id:
+                url2 = f"https://maps.googleapis.com/maps/api/place/details/json?place_id={place_id}&fields=name,rating,reviews,formatted_address&key={api_key}"
+                detail = requests.get(url2, timeout=10).json()
+                for r in detail.get("result", {}).get("reviews", []):
+                    reviews_data.append({
+                        "name": detail.get("result", {}).get("name"),
+                        "rating": r.get("rating"),
+                        "user_ratings_total": None,
+                        "address": detail.get("result", {}).get("formatted_address"),
+                        "snippet": r.get("text")
+                    })
+                return reviews_data
         except Exception:
             pass
+
     # Fallback scraping Google search snippets
     try:
         query = requests.utils.quote(name + " reviews")
@@ -143,19 +149,10 @@ def fetch_reviews(name, api_key=None):
         soup = BeautifulSoup(r.text, "html.parser")
         snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:25]
         for s in snippets:
-            reviews_data.append({"snippet": s})
+            reviews_data.append({"snippet": s, "name": name, "rating": None, "user_ratings_total": None, "address": None})
         return reviews_data
     except Exception:
         return []
-
-# -------------------------
-# Utility: Wrap text columns
-# -------------------------
-def wrap_text_columns(df, cols=None):
-    cols = cols or df.select_dtypes(include=['object']).columns
-    for col in cols:
-        df[col] = df[col].apply(lambda x: f"<div style='white-space: pre-wrap'>{x}</div>" if pd.notna(x) else x)
-    return df
 
 # -------------------------
 # Main App
@@ -172,14 +169,14 @@ if org and search_button:
         st.subheader("Top Google Search Hits")
         for hit in google_hits:
             st.markdown(f"- [{hit['title']}]({hit['link']}) — {hit['snippet']}")
-		
+
         # Try extracting state/city from top hit snippets
         city, state = None, None
         for hit in google_hits:
             snippet = hit['snippet']
-            match = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
-            if match:
-                city, state = match.group(1), match.group(2)
+            match_snip = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
+            if match_snip:
+                city, state = match_snip.group(1), match_snip.group(2)
                 break
 
     with st.spinner("Matching organization..."):
@@ -199,7 +196,6 @@ if org and search_button:
         with st.spinner("Fetching Reviews..."):
             revs = fetch_reviews(org, gkey)
 
-        st.subheader("Top 25 Worst Reviews")
         if revs:
             df_revs = pd.DataFrame(revs)
             expected_cols = ["name", "rating", "user_ratings_total", "address", "snippet"]
@@ -207,19 +203,20 @@ if org and search_button:
                 if col not in df_revs.columns:
                     df_revs[col] = None
 
-            # Sort by rating ascending (worst first)
-            df_worst = df_revs.sort_values("rating", ascending=True).head(25)
-            df_worst = wrap_text_columns(df_worst, cols=["snippet", "name", "address"])
+            # Keep only worst 25 by rating if available, else last 25
+            if "rating" in df_revs.columns and df_revs["rating"].notna().any():
+                df_display = df_revs.sort_values("rating").head(25)
+            else:
+                df_display = df_revs.tail(25)
 
-            # Display scrollable table with wrapped text
-            st.markdown(
-                f"""
-                <div style="overflow-x:auto;">
-                    {df_worst[expected_cols].to_html(index=False, escape=False)}
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            # Wrap text columns for clean display
+            df_display = df_display.fillna("")
+            for col in ["snippet", "address", "name"]:
+                df_display[col] = df_display[col].apply(lambda x: "\n".join([x[i:i+80] for i in range(0, len(x), 80)]))
+
+            st.subheader("Worst 25 Reviews")
+            st.dataframe(df_display[expected_cols], use_container_width=True)
+
         else:
             st.info("No reviews found.")
 
@@ -230,10 +227,7 @@ if org and search_button:
             "reviews": revs,
             "timestamp": datetime.utcnow().isoformat()
         }
-        st.download_button(
-            "Download Profile", 
-            json.dumps(profile, indent=2),
-            f"{org.replace(' ','_')}_profile.json"
-        )
+        st.download_button("Download Profile", json.dumps(profile, indent=2),
+                           f"{org.replace(' ','_')}_profile.json")
     else:
         st.error("No match could be found.")
