@@ -9,8 +9,6 @@ import os
 import json
 import re
 import xml.etree.ElementTree as ET
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
 
 st.set_page_config(page_title="Healthcare Profiler (CMS + Reviews + News)", layout="wide")
 st.title("Healthcare Organization Discovery Profiler")
@@ -125,7 +123,6 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
 
     if api_key:
         try:
-            # Step 1: Text Search to get place_id
             search_url = (
                 f"https://maps.googleapis.com/maps/api/place/textsearch/json?"
                 f"query={requests.utils.quote(name)}&key={api_key}"
@@ -135,37 +132,23 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
             if results:
                 place_id = results[0].get("place_id")
                 if place_id:
-                    # Step 2: Place Details to get reviews
-                    reviews_fetched = 0
-                    while reviews_fetched < max_reviews:
-                        details_url = (
-                            f"https://maps.googleapis.com/maps/api/place/details/json?"
-                            f"place_id={place_id}&fields=name,reviews,formatted_address,rating,user_ratings_total"
-                            f"&key={api_key}"
-                        )
-                        details_resp = requests.get(details_url, timeout=10).json()
-                        place = details_resp.get("result", {})
-                        for r in place.get("reviews", [])[reviews_fetched:]:
-                            reviews_data.append({
-                                "name": place.get("name"),
-                                "address": place.get("formatted_address"),
-                                "rating": r.get("rating"),
-                                "user_ratings_total": place.get("user_ratings_total"),
-                                "author_name": r.get("author_name"),
-                                "review_text": r.get("text"),
-                                "time": datetime.utcfromtimestamp(r.get("time")).isoformat() if r.get("time") else None
-                            })
-                            reviews_fetched += 1
-                        if 'next_page_token' in details_resp:
-                            next_page_token = details_resp['next_page_token']
-                            details_url = (
-                                f"https://maps.googleapis.com/maps/api/place/details/json?"
-                                f"place_id={place_id}&fields=name,reviews,formatted_address,rating,user_ratings_total&"
-                                f"pagetoken={next_page_token}&key={api_key}"
-                            )
-                            details_resp = requests.get(details_url, timeout=10).json()
-                        else:
-                            break
+                    details_url = (
+                        f"https://maps.googleapis.com/maps/api/place/details/json?"
+                        f"place_id={place_id}&fields=name,reviews,formatted_address,rating,user_ratings_total"
+                        f"&key={api_key}"
+                    )
+                    details_resp = requests.get(details_url, timeout=10).json()
+                    place = details_resp.get("result", {})
+                    for r in place.get("reviews", [])[:max_reviews]:
+                        reviews_data.append({
+                            "name": place.get("name"),
+                            "address": place.get("formatted_address"),
+                            "rating": r.get("rating"),
+                            "user_ratings_total": place.get("user_ratings_total"),
+                            "author_name": r.get("author_name"),
+                            "review_text": r.get("text"),
+                            "time": datetime.utcfromtimestamp(r.get("time")).isoformat() if r.get("time") else None
+                        })
             return reviews_data
         except Exception as e:
             st.warning(f"Failed to fetch reviews from API: {e}")
@@ -175,41 +158,12 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
         query = requests.utils.quote(name + " reviews")
         r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-        snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:5]
+        snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:max_reviews]
         for s in snippets:
             reviews_data.append({"review_text": s})
         return reviews_data
     except Exception:
         return []
-
-# -------------------------
-# Fetch Google Business Profile Data
-# -------------------------
-def fetch_gbp_data(location_id, credentials):
-    try:
-        # Ensure credentials are valid
-        if credentials and credentials.expired and credentials.refresh_token:
-            credentials.refresh(Request())
-
-        # Build the API endpoint
-        url = f"https://mybusinessbusinessinformation.googleapis.com/v1/{location_id}"
-
-        # Set the authorization header
-        headers = {
-            "Authorization": f"Bearer {credentials.token}",
-            "Content-Type": "application/json"
-        }
-
-        # Make the request
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-
-        # Parse the response
-        data = response.json()
-        return data
-    except requests.exceptions.RequestException as e:
-        st.warning(f"Failed to fetch Google Business Profile data: {e}")
-        return None
 
 # -------------------------
 # Main App
@@ -251,10 +205,32 @@ if org and search_button:
             st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
 
         with st.spinner("Fetching Reviews..."):
-            revs = fetch_reviews(org, gkey)
+            revs = fetch_reviews(org, gkey, max_reviews=25)
 
         st.subheader("Reviews Table")
         if revs:
-            df_revs = pd.DataFrame
-::contentReference[oaicite:0]{index=0}
- 
+            df_revs = pd.DataFrame(revs)
+            expected_cols = ["name", "author_name", "rating", "user_ratings_total", "address", "review_text", "time"]
+            for col in expected_cols:
+                if col not in df_revs.columns:
+                    df_revs[col] = None
+
+            # Sort by lowest rating first if ratings exist
+            if "rating" in df_revs.columns and df_revs["rating"].notna().any():
+                df_revs = df_revs.sort_values("rating", ascending=True)
+            
+            st.dataframe(df_revs[expected_cols].head(25))
+        else:
+            st.info("No reviews found.")
+
+        profile = {
+            "org_input": org,
+            "matched_name": match.get("Hospital Name") or match.to_dict(),
+            "news": news,
+            "reviews": revs,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        st.download_button("Download Profile", json.dumps(profile, indent=2),
+                           f"{org.replace(' ','_')}_profile.json")
+    else:
+        st.error("No match could be found.")
