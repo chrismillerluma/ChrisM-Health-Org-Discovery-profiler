@@ -116,7 +116,7 @@ def fetch_news(name, limit=5):
         return []
 
 # -------------------------
-# Fetch Reviews
+# Fetch Reviews & Google Business Info
 # -------------------------
 def fetch_reviews(name, api_key=None, max_reviews=25):
     reviews_data = []
@@ -139,7 +139,7 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
                         f"https://maps.googleapis.com/maps/api/place/details/json?"
                         f"place_id={place_id}&fields=name,reviews,formatted_address,rating,"
                         f"user_ratings_total,formatted_phone_number,international_phone_number,"
-                        f"website,opening_hours,geometry,types,photos&key={api_key}"
+                        f"website,opening_hours,geometry,types,place_id&key={api_key}"
                     )
                     details_resp = requests.get(details_url, timeout=10).json()
                     place = details_resp.get("result", {})
@@ -156,7 +156,7 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
         except Exception as e:
             st.warning(f"Failed to fetch reviews from API: {e}")
 
-    # 2️⃣ Google Search Snippets
+    # 2️⃣ Google Search Snippets (fill in if API didn't reach max_reviews)
     if len(reviews_data) < max_reviews:
         try:
             remaining = max_reviews - len(reviews_data)
@@ -178,6 +178,25 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
             pass
 
     return reviews_data[:max_reviews], place
+
+# -------------------------
+# Scrape Website for About Info
+# -------------------------
+def scrape_about(website_url):
+    if not website_url:
+        return {}
+    try:
+        r = requests.get(website_url, headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        title = soup.title.string.strip() if soup.title else ""
+        meta_desc = ""
+        desc_tag = soup.find("meta", attrs={"name":"description"}) or soup.find("meta", attrs={"property":"og:description"})
+        if desc_tag and desc_tag.get("content"):
+            meta_desc = desc_tag["content"].strip()
+        h1_text = soup.find("h1").get_text().strip() if soup.find("h1") else ""
+        return {"title": title, "meta_description": meta_desc, "h1": h1_text, "url": website_url}
+    except Exception:
+        return {}
 
 # -------------------------
 # Main App
@@ -217,6 +236,9 @@ if org and search_button:
         for n in news:
             st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
 
+        # -------------------------
+        # Reviews & Business Profile
+        # -------------------------
         with st.spinner("Fetching Reviews and Business Profile..."):
             revs, place_info = fetch_reviews(org, gkey, max_reviews=25)
 
@@ -249,6 +271,17 @@ if org and search_button:
                 "place_id": place_info.get("place_id")
             })
 
+        # -------------------------
+        # Scrape About Info
+        # -------------------------
+        about_data = scrape_about(place_info.get("website") if place_info else None)
+        if about_data:
+            st.subheader("About Information (Scraped from Website)")
+            st.json(about_data)
+
+        # -------------------------
+        # Reputation Score
+        # -------------------------
         with st.spinner("Calculating Business Performance / Reputation Score..."):
             try:
                 if place_info:
@@ -264,15 +297,27 @@ if org and search_button:
             except Exception as e:
                 st.warning(f"Could not calculate performance score: {e}")
 
-        profile = {
+        # -------------------------
+        # Download Full Profile
+        # -------------------------
+        profile_data = {
             "org_input": org,
             "matched_name": match.get("Hospital Name") or match.to_dict(),
             "news": news,
             "reviews": revs,
             "business_profile": place_info,
+            "about_info": about_data,
             "timestamp": datetime.utcnow().isoformat()
         }
-        st.download_button("Download Profile", json.dumps(profile, indent=2),
-                           f"{org.replace(' ','_')}_profile.json")
-    else:
-        st.error("No match could be found.")
+
+        st.subheader("Download Full Profile")
+        # JSON
+        json_bytes = json.dumps(profile_data, indent=2).encode('utf-8')
+        st.download_button(
+            label="Download Full Profile as JSON",
+            data=json_bytes,
+            file_name=f"{normalize_name(org)}_profile.json",
+            mime="application/json"
+        )
+        # CSV (reviews only)
+        if
