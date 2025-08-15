@@ -5,6 +5,8 @@ from bs4 import BeautifulSoup
 import json
 from datetime import datetime
 import re
+from rapidfuzz import process, fuzz
+from fuzzywuzzy import fuzz, process
 
 st.set_page_config(page_title="Healthcare Organization Discovery Profiler", layout="wide")
 st.title("Healthcare Organization Discovery Profiler")
