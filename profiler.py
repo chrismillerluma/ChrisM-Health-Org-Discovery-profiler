@@ -2,14 +2,11 @@ import streamlit as st
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-import xml.etree.ElementTree as ET
-from rapidfuzz import process, fuzz
-from datetime import datetime
-import io
-import os
 import json
+from datetime import datetime
+import re
 
-st.set_page_config(page_title="Healthcare Profiler (CMS + Reviews + News + U.S. News)", layout="wide")
+st.set_page_config(page_title="Healthcare Organization Discovery Profiler", layout="wide")
 st.title("Healthcare Organization Discovery Profiler")
 
 CMS_URL = (
@@ -124,6 +121,18 @@ def fetch_usnews_highlights(name):
         st.warning(f"U.S. News highlights fetch failed: {e}")
     return []
 
+def fetch_medicare_data(hospital_id):
+    url = f"https://www.medicare.gov/care-compare/details/hospital/{hospital_id}/view-all"
+    try:
+        r = requests.get(url, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        ratings = soup.find("div", class_="rating")
+        if ratings:
+            return ratings.get_text(strip=True)
+    except Exception as e:
+        st.warning(f"Medicare data fetch failed: {e}")
+    return "No ratings available"
+
 df_cms = load_cms()
 
 org = st.text_input("Organization Name (e.g., UCSF Medical Center)")
@@ -131,12 +140,14 @@ state = st.text_input("State (optional, e.g., CA)").strip()
 city = st.text_input("City (optional, e.g., San Francisco)").strip()
 gkey = st.text_input("Google Places API Key (optional)", type="password")
 
+search_button = st.button("Search")
+
 if org:
     with st.spinner("Matching organization..."):
         match, name_col, msg = match_org(org, df_cms, state=state or None, city=city or None)
         st.info(msg)
-    
-    if match is not None:
+
+    if match is not None and search_button:
         st.subheader("Facility Info")
         st.json(match.to_dict())
 
@@ -168,12 +179,18 @@ if org:
         else:
             st.write("No highlights found.")
 
+        with st.spinner("Fetching Medicare Ratings..."):
+            medicare_ratings = fetch_medicare_data(match.get("Facility ID"))
+        st.subheader("Medicare Ratings")
+        st.write(medicare_ratings)
+
         profile = {
             "org_input": org,
             "matched_name": match.get(name_col) or match.to_dict(),
             "news": news,
             "reviews": revs,
             "usnews_highlights": usnews_highlights,
+            "medicare_ratings": medicare_ratings,
             "timestamp": datetime.utcnow().isoformat()
         }
         st.download_button(
