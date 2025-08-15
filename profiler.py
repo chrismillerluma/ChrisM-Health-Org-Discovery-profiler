@@ -191,13 +191,25 @@ if org and search_button:
             revs = fetch_reviews(org, gkey)
 
         st.subheader("Reviews Table")
-        if revs:
-            df_revs = pd.DataFrame(revs)
-            expected_cols = ["name", "rating", "user_ratings_total", "address", "snippet"]
-            for col in expected_cols:
-                if col not in df_revs.columns:
-                    df_revs[col] = None
-            st.dataframe(df_revs[expected_cols])
+if revs:
+    df_revs = pd.DataFrame(revs)
+    expected_cols = ["name", "rating", "user_ratings_total", "address", "snippet"]
+    for col in expected_cols:
+        if col not in df_revs.columns:
+            df_revs[col] = None
+    st.dataframe(df_revs[expected_cols])
+
+    # Show top 5 best reviews
+    if "rating" in df_revs.columns and df_revs["rating"].notna().any():
+        st.subheader("Top 5 Best Reviews")
+        df_best = df_revs.sort_values("rating", ascending=False).head(5)
+        st.dataframe(df_best[expected_cols])
+
+        st.subheader("Top 5 Worst Reviews")
+        df_worst = df_revs.sort_values("rating", ascending=True).head(5)
+        st.dataframe(df_worst[expected_cols])
+else:
+    st.info("No reviews found.")
         else:
             st.info("No reviews found.")
 
