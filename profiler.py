@@ -262,4 +262,19 @@ if org and search_button:
                 "website": place_info.get("website"),
                 "opening_hours": place_info.get("opening_hours"),
                 "geometry": place_info.get("geometry"),
-               
+                     st.markdown(f"- **Total Reviews**: {total_reviews}")
+                else:
+                    st.info("Insufficient data to calculate reputation score.")
+            except Exception as e:
+                st.warning(f"Error calculating reputation score: {e}")
+
+        st.subheader("Additional Notes")
+        st.markdown("""
+        - Reputation Score is calculated as: `Rating * min(Total Reviews / 100, 1) * 20`
+        - Data sources include CMS, Google News, Google Reviews, and the facility website.
+        - Scores are capped at 20 for easy comparison between organizations.
+        """)
+        
+        else:
+        st.warning("No matching facility found in CMS database. Try adjusting the organization name or checking the Google search results.")
+
