@@ -167,9 +167,9 @@ if org and search_button:
         city, state = None, None
         for hit in google_hits:
             snippet = hit['snippet']
-            match_snip = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
-            if match_snip:
-                city, state = match_snip.group(1), match_snip.group(2)
+            match = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
+            if match:
+                city, state = match.group(1), match.group(2)
                 break
 
     with st.spinner("Matching organization..."):
@@ -198,19 +198,25 @@ if org and search_button:
                     df_revs[col] = None
             st.dataframe(df_revs[expected_cols])
 
-            # Show top 5 best reviews
+            # Show top 5 best reviews (keep metadata)
             if "rating" in df_revs.columns and df_revs["rating"].notna().any():
                 st.subheader("Top 5 Best Reviews")
                 df_best = df_revs.sort_values("rating", ascending=False).head(5)
                 st.dataframe(df_best[expected_cols])
 
-                st.subheader("Top 5 Worst Reviews")
+            # Show top 5 worst reviews using review text
+            st.subheader("Top 5 Worst Reviews")
+            if "rating" in df_revs.columns and df_revs["rating"].notna().any():
                 df_worst = df_revs.sort_values("rating", ascending=True).head(5)
-                st.dataframe(df_worst[expected_cols])
+                if "snippet" in df_worst.columns and df_worst["snippet"].notna().any():
+                    df_worst_display = df_worst[["snippet", "rating", "user_ratings_total"]]
+                    df_worst_display = df_worst_display.rename(columns={"snippet": "review_text"})
+                else:
+                    df_worst_display = df_worst[expected_cols]
+                st.dataframe(df_worst_display)
         else:
             st.info("No reviews found.")
 
-        # Profile download
         profile = {
             "org_input": org,
             "matched_name": match.get("Hospital Name") or match.to_dict(),
