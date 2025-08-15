@@ -270,7 +270,6 @@ if org and search_button:
         if about_data:
             st.subheader("About Information (Scraped from Website)")
             st.json(about_data)
-
         with st.spinner("Calculating Business Performance / Reputation Score..."):
     try:
         if place_info:
@@ -318,4 +317,3 @@ if revs:
         file_name=f"{normalize_name(org)}_reviews.csv",
         mime="text/csv"
     )
-
