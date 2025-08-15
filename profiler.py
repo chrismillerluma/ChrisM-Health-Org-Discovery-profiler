@@ -6,7 +6,6 @@ from rapidfuzz import process, fuzz
 from datetime import datetime
 import io
 import os
-import json
 import re
 import xml.etree.ElementTree as ET
 
@@ -216,97 +215,62 @@ def calculate_cms_score(row):
             if val is not None:
                 score += val
                 count += 1
-    return score / count if count else None
+    return round(score/count,2) if count else None
 
 # -------------------------
-# Main App
+# Load CMS
 # -------------------------
-df_cms = load_cms()
+cms_df = load_cms()
+if cms_df.empty:
+    st.stop()
 
-org = st.text_input("Organization Name (e.g., UCSF Medical Center)")
-gkey = st.text_input("Google Places API Key (optional)", type="password")
-search_button = st.button("Search")
+# -------------------------
+# User Input
+# -------------------------
+hospital_name = st.text_input("Enter Hospital/Healthcare Organization Name:")
+state = st.text_input("State (optional):")
+city = st.text_input("City (optional):")
+api_key = st.text_input("Google Places API Key (optional, for detailed reviews):", type="password")
 
-if org and search_button:
-    with st.spinner("Validating via Google search..."):
-        google_hits = google_search_name(org, limit=3)
-        st.subheader("Top Google Search Hits")
-        for hit in google_hits:
-            st.markdown(f"- [{hit['title']}]({hit['link']}) — {hit['snippet']}")
+if hospital_name:
+    matched_row, col, msg = match_org(hospital_name, cms_df, state, city)
+    st.info(msg)
+    if matched_row is not None:
+        cms_score = calculate_cms_score(matched_row)
+        st.write("### CMS Profile")
+        st.dataframe(matched_row.to_frame().T)
+        st.write(f"**CMS Score:** {cms_score}")
 
-        city, state = None, None
-        for hit in google_hits:
-            snippet = hit['snippet']
-            match_loc = re.search(r'\b([A-Za-z\s]+),\s([A-Z]{2})\b', snippet)
-            if match_loc:
-                city, state = match_loc.group(1), match_loc.group(2)
-                break
+        st.write("### Google News")
+        news = fetch_news(hospital_name)
+        if news:
+            st.dataframe(pd.DataFrame(news))
+        else:
+            st.info("No recent news found.")
 
-    with st.spinner("Matching organization..."):
-        match, name_col, msg = match_org(org, df_cms, state=state, city=city)
-        st.info(msg)
-
-    if match is not None:
-        st.subheader("Facility Info")
-        st.json(match.to_dict())
-
-        with st.spinner("Fetching Google News..."):
-            news = fetch_news(match.get("Hospital Name") or match[name_col], limit=5)
-        st.subheader("Recent News")
-        for n in news:
-            st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
-
-        with st.spinner("Fetching Reviews and Business Profile..."):
-            revs, place_info = fetch_reviews(org, gkey, max_reviews=25)
-
-        st.subheader("Reviews Table")
-        if revs:
-            df_revs = pd.DataFrame(revs)
-            expected_cols = ["name", "author_name", "rating", "user_ratings_total", "address", "review_text", "time"]
-            for col in expected_cols:
-                if col not in df_revs.columns:
-                    df_revs[col] = None
-            if "rating" in df_revs.columns and df_revs["rating"].notna().any():
-                df_revs = df_revs.sort_values("rating", ascending=True)
-            st.dataframe(df_revs[expected_cols].head(25))
+        st.write("### Reviews & Business Info")
+        reviews, place_info = fetch_reviews(hospital_name, api_key=api_key)
+        if reviews:
+            st.dataframe(pd.DataFrame(reviews))
         else:
             st.info("No reviews found.")
 
-        st.subheader("Google Business Profile Info")
-        if place_info:
-            st.json({
-                "name": place_info.get("name"),
-                "address": place_info.get("formatted_address"),
-                "rating": place_info.get("rating"),
-                "user_ratings_total": place_info.get("user_ratings_total"),
-                "phone": place_info.get("formatted_phone_number"),
-                "international_phone": place_info.get("international_phone_number"),
-                "website": place_info.get("website"),
-                "opening_hours": place_info.get("opening_hours"),
-                "geometry": place_info.get("geometry"),
-                "types": place_info.get("types"),
-                "place_id": place_info.get("place_id")
-            })
-
-        about_data = scrape_about(place_info.get("website") if place_info else None)
-        if about_data:
-            st.subheader("About Information (Scraped from Website)")
-            st.json(about_data)
+        st.write("### Website Info")
+        website_url = place_info.get("website") if place_info else None
+        about_info = scrape_about(website_url)
+        st.json(about_info)
 
         # -------------------------
-        # Calculate Combined Reputation Score
+        # Excel Download
         # -------------------------
-        cms_score = calculate_cms_score(match)
-        google_score = place_info.get("rating", None)
-        if cms_score and google_score:
-            combined_score = 0.5*google_score + 0.5*cms_score
-        elif cms_score:
-            combined_score = cms_score
-        elif google_score:
-            combined_score = google_score
-        else:
-            combined_score = None
-
-        if combined_score:
-            st.subheader("Business / Reputation Score")
-            st.metric("Score (0-5 scale)", round(combined_score,2))
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            matched_row.to_frame().T.to_excel(writer, sheet_name="CMS Profile", index=False)
+            if reviews:
+                pd.DataFrame(reviews).to_excel(writer, sheet_name="Reviews", index=False)
+            if news:
+                pd.DataFrame(news).to_excel(writer, sheet_name="News", index=False)
+            if about_info:
+                pd.DataFrame([about_info]).to_excel(writer, sheet_name="Website Info", index=False)
+        output.seek(0)
+        st.download_button("Download Full Profile Excel", data=output, file_name=f"{hospital_name}_profile.xlsx")
