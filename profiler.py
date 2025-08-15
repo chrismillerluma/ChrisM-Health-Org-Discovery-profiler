@@ -19,7 +19,7 @@ CMS_URL = (
 )
 
 # -------------------------
-# Load CMS Data (prefetch)
+# Load CMS Data
 # -------------------------
 @st.cache_data
 def load_cms():
@@ -94,7 +94,6 @@ def match_org(name, df, state=None, city=None):
         _, score, idx = match
         return df_filtered.iloc[idx], col, f"Matched '{choices[idx]}' (score {score})"
     
-    # Fallback
     subs = df_filtered[df_filtered[col].str.contains(name, case=False, na=False)]
     if not subs.empty:
         return subs.iloc[0], col, f"Substring fallback: '{subs.iloc[0][col]}'"
@@ -117,33 +116,53 @@ def fetch_news(name, limit=5):
         return []
 
 # -------------------------
-# Fetch Reviews (keep text content if available)
+# Fetch Reviews with real text
 # -------------------------
 def fetch_reviews(name, api_key=None):
     reviews_data = []
+
     if api_key:
         try:
-            url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={requests.utils.quote(name)}&key={api_key}"
-            data = requests.get(url, timeout=10).json()
-            for r in data.get("results", [])[:25]:  # fetch max 25 for worst reviews
-                reviews_data.append({
-                    "name": r.get("name"),
-                    "rating": r.get("rating"),
-                    "user_ratings_total": r.get("user_ratings_total"),
-                    "address": r.get("formatted_address"),
-                    "snippet": r.get("reviews")[0].get("text") if r.get("reviews") else None
-                })
+            # Step 1: Text Search to get place_id
+            search_url = (
+                f"https://maps.googleapis.com/maps/api/place/textsearch/json?"
+                f"query={requests.utils.quote(name)}&key={api_key}"
+            )
+            search_resp = requests.get(search_url, timeout=10).json()
+            results = search_resp.get("results", [])
+            if results:
+                place_id = results[0].get("place_id")
+                if place_id:
+                    # Step 2: Place Details to get reviews
+                    details_url = (
+                        f"https://maps.googleapis.com/maps/api/place/details/json?"
+                        f"place_id={place_id}&fields=name,reviews,formatted_address,rating,user_ratings_total"
+                        f"&key={api_key}"
+                    )
+                    details_resp = requests.get(details_url, timeout=10).json()
+                    place = details_resp.get("result", {})
+                    for r in place.get("reviews", [])[:10]:  # get up to 10 reviews
+                        reviews_data.append({
+                            "name": place.get("name"),
+                            "address": place.get("formatted_address"),
+                            "rating": r.get("rating"),
+                            "user_ratings_total": place.get("user_ratings_total"),
+                            "author_name": r.get("author_name"),
+                            "review_text": r.get("text"),
+                            "time": datetime.utcfromtimestamp(r.get("time")).isoformat() if r.get("time") else None
+                        })
             return reviews_data
-        except Exception:
-            pass
-    # Fallback scraping snippets
+        except Exception as e:
+            st.warning(f"Failed to fetch reviews from API: {e}")
+
+    # Fallback scraping Google search snippets
     try:
         query = requests.utils.quote(name + " reviews")
         r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-        snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:25]
+        snippets = [span.get_text() for span in soup.find_all("span") if len(span.get_text()) > 20][:5]
         for s in snippets:
-            reviews_data.append({"snippet": s})
+            reviews_data.append({"review_text": s})
         return reviews_data
     except Exception:
         return []
@@ -151,7 +170,7 @@ def fetch_reviews(name, api_key=None):
 # -------------------------
 # Main App
 # -------------------------
-df_cms = load_cms()  # Prefetch CMS
+df_cms = load_cms()
 
 org = st.text_input("Organization Name (e.g., UCSF Medical Center)")
 gkey = st.text_input("Google Places API Key (optional)", type="password")
@@ -163,7 +182,7 @@ if org and search_button:
         st.subheader("Top Google Search Hits")
         for hit in google_hits:
             st.markdown(f"- [{hit['title']}]({hit['link']}) — {hit['snippet']}")
-		
+
         # Try extracting state/city from top hit snippets
         city, state = None, None
         for hit in google_hits:
@@ -190,26 +209,24 @@ if org and search_button:
         with st.spinner("Fetching Reviews..."):
             revs = fetch_reviews(org, gkey)
 
+        st.subheader("Reviews Table")
         if revs:
             df_revs = pd.DataFrame(revs)
-            expected_cols = ["name", "rating", "user_ratings_total", "address", "snippet"]
+            expected_cols = ["name", "author_name", "rating", "user_ratings_total", "address", "review_text", "time"]
             for col in expected_cols:
                 if col not in df_revs.columns:
                     df_revs[col] = None
+            st.dataframe(df_revs[expected_cols])
 
-            # Keep top 25 worst reviews
+            # Show top 5 best reviews
             if "rating" in df_revs.columns and df_revs["rating"].notna().any():
-                df_worst = df_revs.sort_values("rating", ascending=True).head(25)
-            else:
-                df_worst = df_revs.head(25)
+                st.subheader("Top 5 Best Reviews")
+                df_best = df_revs.sort_values("rating", ascending=False).head(5)
+                st.dataframe(df_best[expected_cols])
 
-            st.subheader("Top 25 Worst Reviews")
-            
-            # Apply text wrapping for 'snippet' column
-            if 'snippet' in df_worst.columns:
-                df_worst['snippet'] = df_worst['snippet'].apply(lambda x: x if pd.isna(x) else "\n".join([x[i:i+80] for i in range(0, len(x), 80)]))
-            
-            st.dataframe(df_worst[expected_cols])
+                st.subheader("Top 5 Worst Reviews")
+                df_worst = df_revs.sort_values("rating", ascending=True).head(5)
+                st.dataframe(df_worst[["author_name","review_text","rating","time"]])
         else:
             st.info("No reviews found.")
 
