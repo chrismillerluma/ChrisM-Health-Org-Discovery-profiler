@@ -287,16 +287,16 @@ if org and search_button:
 # -------------------------
 # Export Data
 # -------------------------
-if match is not None:
-    # Export CMS facility info
-    cms_df_export = pd.DataFrame([match.to_dict()])
-    csv_cms = cms_df_export.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Download Facility Info (CSV)",
-        data=csv_cms,
-        file_name=f"{normalize_name(org)}_facility.csv",
-        mime="text/csv"
-    )
+    if match is not None:
+        # Export CMS facility info
+        cms_df_export = pd.DataFrame([match.to_dict()])
+        csv_cms = cms_df_export.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Facility Info (CSV)",
+            data=csv_cms,
+            file_name=f"{normalize_name(org)}_facility.csv",
+            mime="text/csv"
+        )
 
     # Export Reviews
     if revs:
