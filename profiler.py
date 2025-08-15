@@ -10,7 +10,7 @@ import json
 import re
 import xml.etree.ElementTree as ET
 
-st.set_page_config(page_title="Healthcare Profiler (CMS + Reviews + News)", layout="wide")
+st.set_page_config(page_title="Healthcare Profiler (CMS + Reviews + News + Business Profile)", layout="wide")
 st.title("Healthcare Organization Discovery Profiler")
 
 CMS_URL = (
@@ -139,7 +139,9 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
                     )
                     details_resp = requests.get(details_url, timeout=10).json()
                     place = details_resp.get("result", {})
-                    for r in place.get("reviews", [])[:max_reviews]:
+                    # Google returns max 5 reviews per request; we can batch 5 times if needed
+                    reviews = place.get("reviews", [])
+                    for r in reviews[:max_reviews]:
                         reviews_data.append({
                             "name": place.get("name"),
                             "address": place.get("formatted_address"),
@@ -153,7 +155,7 @@ def fetch_reviews(name, api_key=None, max_reviews=25):
         except Exception as e:
             st.warning(f"Failed to fetch reviews from API: {e}")
 
-    # Fallback scraping Google search snippets
+    # fallback scraping Google search snippets
     try:
         query = requests.utils.quote(name + " reviews")
         r = requests.get(f"https://www.google.com/search?q={query}", headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
@@ -204,6 +206,9 @@ if org and search_button:
         for n in news:
             st.markdown(f"- [{n['title']}]({n['link']}) — {n['date']}")
 
+        # -------------------------
+        # Reviews Section
+        # -------------------------
         with st.spinner("Fetching Reviews..."):
             revs = fetch_reviews(org, gkey, max_reviews=25)
 
@@ -223,6 +228,43 @@ if org and search_button:
         else:
             st.info("No reviews found.")
 
+        # -------------------------
+        # Public Business Profile Section
+        # -------------------------
+        with st.spinner("Fetching Public Business Profile..."):
+            if gkey:
+                try:
+                    profile_url = (
+                        f"https://maps.googleapis.com/maps/api/place/textsearch/json?"
+                        f"query={requests.utils.quote(org)}&key={gkey}"
+                    )
+                    profile_resp = requests.get(profile_url, timeout=10).json()
+                    profile_results = profile_resp.get("results", [])
+                    if profile_results:
+                        place = profile_results[0]
+                        st.subheader("Google Business Profile Info")
+                        st.json({
+                            "name": place.get("name"),
+                            "address": place.get("formatted_address"),
+                            "rating": place.get("rating"),
+                            "user_ratings_total": place.get("user_ratings_total"),
+                            "types": place.get("types"),
+                            "place_id": place.get("place_id")
+                        })
+
+                        st.subheader("Top 25 Public Reviews")
+                        public_reviews = fetch_reviews(org, gkey, max_reviews=25)
+                        if public_reviews:
+                            df_public_reviews = pd.DataFrame(public_reviews)
+                            st.dataframe(df_public_reviews)
+                except Exception as e:
+                    st.warning(f"Could not fetch Google Business Profile info: {e}")
+            else:
+                st.info("Provide Google Places API key to fetch business profile info.")
+
+        # -------------------------
+        # Download Profile
+        # -------------------------
         profile = {
             "org_input": org,
             "matched_name": match.get("Hospital Name") or match.to_dict(),
