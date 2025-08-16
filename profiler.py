@@ -262,48 +262,62 @@ if org and search_button:
                 "website": place_info.get("website"),
                 "opening_hours": place_info.get("opening_hours"),
                 "geometry": place_info.get("geometry"),
-               
-# -------------------------
-# Export Data
-# -------------------------
-if match is not None:
-    # Export CMS facility info
-    cms_df_export = pd.DataFrame([match.to_dict()])
-    csv_cms = cms_df_export.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Download Facility Info (CSV)",
-        data=csv_cms,
-        file_name=f"{normalize_name(org)}_facility.csv",
-        mime="text/csv"
-    )
+                "types": place_info.get("types"),
+                "place_id": place_info.get("place_id")
+            })
 
-    # Export Reviews
-    if revs:
-        df_revs_export = pd.DataFrame(revs)
-        csv_revs = df_revs_export.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Download Reviews (CSV)",
-            data=csv_revs,
-            file_name=f"{normalize_name(org)}_reviews.csv",
-            mime="text/csv"
-        )
+        about_data = scrape_about(place_info.get("website") if place_info else None)
+        if about_data:
+            st.subheader("About Information (Scraped from Website)")
+            st.json(about_data)
 
-    # Optionally export Google Business info
-    if place_info:
-        place_json = json.dumps(place_info, indent=2)
+        with st.spinner("Calculating Business Performance / Reputation Score..."):
+            try:
+                if place_info:
+                    rating = place_info.get("rating", 0)
+                    total_reviews = place_info.get("user_ratings_total", 1)
+                    rep_score = round(rating * min(total_reviews / 100, 1) * 20, 2)
+                    st.subheader("Business Performance / Reputation Score")
+                    st.markdown(f"- **Score (0-20)**: {rep_score}")
+                    st.markdown(f"- **Rating**: {rating} / 5")
+                    st.markdown(f"- **Total Reviews**: {total_reviews}")
+                else:
+                    st.info("Google Places API key required to calculate reputation score.")
+            except Exception as e:
+                st.warning(f"Could not calculate performance score: {e}")
+                
+
+
+        
+        # -------------------------
+        # Download Full Profile
+        # -------------------------
+        profile_data = {
+            "org_input": org,
+            "matched_name": match.get("Hospital Name") or match.to_dict(),
+            "news": news,
+            "reviews": revs,
+            "business_profile": place_info,
+            "about_info": about_data,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        st.subheader("Download Full Profile")
+        # JSON
+        json_bytes = json.dumps(profile_data, indent=2).encode('utf-8')
         st.download_button(
-            label="Download Google Business Profile (JSON)",
-            data=place_json,
-            file_name=f"{normalize_name(org)}_business_profile.json",
+            label="Download Full Profile as JSON",
+            data=json_bytes,
+            file_name=f"{normalize_name(org)}_profile.json",
             mime="application/json"
         )
-
-    # Export About / Website Scrape
-    if about_data:
-        about_json = json.dumps(about_data, indent=2)
-        st.download_button(
-            label="Download Website About Info (JSON)",
-            data=about_json,
-            file_name=f"{normalize_name(org)}_about.json",
-            mime="application/json"
-        )
+        # CSV (reviews only)
+        if revs:
+            df_revs_download = pd.DataFrame(revs)
+            csv_bytes = df_revs_download.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Download Reviews as CSV",
+                data=csv_bytes,
+                file_name=f"{normalize_name(org)}_reviews.csv",
+                mime="text/csv"
+            )
