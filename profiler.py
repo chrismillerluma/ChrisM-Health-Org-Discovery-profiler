@@ -11,7 +11,7 @@ import re
 import xml.etree.ElementTree as ET
 
 st.set_page_config(page_title="Healthcare Profiler (CMS + Reviews + News + Business Profile)", layout="wide")
-st.title("Healthcare Organization Discovery Profiler")
+st.title("Healthcare Org Discovery Profiler v3")
 
 CMS_URL = (
     "https://data.cms.gov/provider-data/sites/default/files/resources/"
